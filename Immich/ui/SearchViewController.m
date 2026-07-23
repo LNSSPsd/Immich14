@@ -191,6 +191,11 @@ static const CGFloat kScopeBarHeight = 44;
 		[self.activityIndicator.topAnchor constraintEqualToAnchor:self.scopeContainer.bottomAnchor constant:24],
 	]];
 
+	self.people = [IMSearchApi cachedPeople];
+	self.placeAssets = [IMSearchApi cachedPlaceAssets];
+	self.placeCityNames = [IMSearchApi cachedPlaceCityNames];
+	[self.collectionView reloadData];
+
 	[self loadBrowseData];
 }
 

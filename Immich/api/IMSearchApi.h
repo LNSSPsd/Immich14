@@ -27,12 +27,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (void)allPeopleWithCompletion:(void (^)(NSArray<IMPerson *> *_Nullable people, NSError *_Nullable error))completion;
 
++ (NSArray<IMPerson *> *)cachedPeople;
+
 + (nullable NSURLSessionTask *)thumbnailDataForPersonId:(NSString *)personId
                                               completion:(void (^)(NSData *_Nullable data, NSError *_Nullable error))completion;
 
 + (void)assetsByCityWithCompletion:(void (^)(NSArray<IMAsset *> *_Nullable assets,
                                              NSArray<NSString *> *_Nullable cityNames,
                                              NSError *_Nullable error))completion;
+
++ (NSArray<IMAsset *> *)cachedPlaceAssets;
++ (NSArray<NSString *> *)cachedPlaceCityNames;
 
 @end
 

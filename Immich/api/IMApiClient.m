@@ -1,5 +1,6 @@
 #import "IMApiClient.h"
 #import "IMSession.h"
+#import "IMPrefs.h"
 
 NSErrorDomain const IMApiErrorDomain = @"IMApiErrorDomain";
 
@@ -9,7 +10,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	IMApiErrorServer = 3,
 };
 
-@interface IMApiClient ()
+@interface IMApiClient () <NSURLSessionDelegate>
 @property (nonatomic, strong) NSURLSession *urlSession;
 @property (nonatomic, copy, nullable) NSURL *fixedBaseURL; 
 @property (nonatomic) BOOL usesSessionBaseURL;
@@ -32,7 +33,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	if (self) {
 		NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
 		config.timeoutIntervalForRequest = 30;
-		_urlSession = [NSURLSession sessionWithConfiguration:config];
+		_urlSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
 	}
 	return self;
 }
@@ -298,6 +299,20 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	    }];
 	[task resume];
 	return task;
+}
+
+#pragma mark - TLS
+
+- (void)URLSession:(NSURLSession *)session
+    didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge
+      completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *_Nullable credential))completionHandler {
+	if (![challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust] ||
+	    !IMPrefs.shared.allowInsecureTLS) {
+		completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+		return;
+	}
+	NSURLCredential *credential = [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust];
+	completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
 }
 
 @end

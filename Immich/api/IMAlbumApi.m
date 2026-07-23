@@ -19,6 +19,8 @@ static BOOL IMAllBulkIdsSucceeded(id json) {
 
 @implementation IMAlbumApi
 
+static NSArray<IMAlbum *> *sCachedAlbums;
+
 #pragma mark - Album CRUD
 
 + (void)allAlbumsWithCompletion:(void (^)(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error))completion {
@@ -29,8 +31,14 @@ static BOOL IMAllBulkIdsSucceeded(id json) {
 			    completion(nil, error);
 			    return;
 		    }
-		    completion([IMAlbum albumsWithArray:(NSArray *)json], nil);
+		    NSArray<IMAlbum *> *albums = [IMAlbum albumsWithArray:(NSArray *)json];
+		    sCachedAlbums = albums;
+		    completion(albums, nil);
 	    }];
+}
+
++ (NSArray<IMAlbum *> *)cachedAlbums {
+	return sCachedAlbums ?: @[];
 }
 
 + (void)createAlbumWithName:(NSString *)name

@@ -127,4 +127,33 @@
 	return task;
 }
 
+- (void)diskCacheSizeWithCompletion:(void (^)(unsigned long long bytes))completion {
+	NSString *dir = self.diskCacheDir;
+	dispatch_async(self.ioQueue, ^{
+		NSFileManager *fm = [NSFileManager defaultManager];
+		unsigned long long total = 0;
+		for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+			NSDictionary *attrs = [fm attributesOfItemAtPath:[dir stringByAppendingPathComponent:name] error:nil];
+			total += attrs.fileSize;
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(total);
+		});
+	});
+}
+
+- (void)clearWithCompletion:(void (^)(void))completion {
+	[self.memoryCache removeAllObjects];
+	NSString *dir = self.diskCacheDir;
+	dispatch_async(self.ioQueue, ^{
+		NSFileManager *fm = [NSFileManager defaultManager];
+		for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+			[fm removeItemAtPath:[dir stringByAppendingPathComponent:name] error:nil];
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion();
+		});
+	});
+}
+
 @end

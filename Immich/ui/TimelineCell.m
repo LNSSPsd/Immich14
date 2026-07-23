@@ -1,6 +1,7 @@
 #import "TimelineCell.h"
 #import "IMThumbCache.h"
 #import "IMAssetApi.h"
+#import "IMPrefs.h"
 #import "common.h"
 
 NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
@@ -70,7 +71,7 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 	NSString *assetId = asset.assetId;
 	__weak typeof(self) weakSelf = self;
 	self.thumbTask = [[IMThumbCache shared] thumbnailForAssetId:assetId
-	                                                         size:IMAssetMediaSizeThumbnail
+	                                                         size:[IMPrefs shared].thumbnailQuality
 	                                                   completion:^(UIImage *_Nullable image) {
 		    weakSelf.imageView.image = image;
 	    }];

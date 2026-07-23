@@ -1,10 +1,13 @@
 #import "RootViewController.h"
 #import "common.h"
-#import "IMAuthApi.h"
-#import "IMSession.h"
 #import "TimelineViewController.h"
 #import "SearchViewController.h"
 #import "AlbumsViewController.h"
+#import "SettingsViewController.h"
+#import "IMAlbumApi.h"
+#import "IMSearchApi.h"
+#import "IMUserApi.h"
+#import "IMServerApi.h"
 
 @implementation RootViewController
 
@@ -18,15 +21,13 @@
 	[titles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger i, BOOL *stop) {
 		UIViewController *vc;
 		if ([title isEqualToString:_(@"Settings")]) {
-			vc = [self settingsPlaceholder];
+			vc = [[SettingsViewController alloc] init];
 		} else if ([title isEqualToString:_(@"Timeline")]) {
 			vc = [[TimelineViewController alloc] init];
 		} else if ([title isEqualToString:_(@"Search")]) {
 			vc = [[SearchViewController alloc] init];
-		} else if ([title isEqualToString:_(@"Albums")]) {
-			vc = [[AlbumsViewController alloc] init];
 		} else {
-			vc = [self placeholderWithTitle:title];
+			vc = [[AlbumsViewController alloc] init];
 		}
 		UIImage *img = nil;
 		if (@available(iOS 13.0, *)) {
@@ -37,46 +38,23 @@
 	}];
 
 	self.viewControllers = tabs;
+
+	[self prefetchTabData];
 }
 
-- (UIViewController *)placeholderWithTitle:(NSString *)title {
-	UIViewController *vc = [[UIViewController alloc] init];
-	vc.title = title;
-	if (@available(iOS 13.0, *)) {
-		vc.view.backgroundColor = UIColor.systemBackgroundColor;
-	} else {
-		vc.view.backgroundColor = UIColor.whiteColor;
-	}
-
-	UILabel *label = [[UILabel alloc] init];
-	label.translatesAutoresizingMaskIntoConstraints = NO;
-	label.text = [NSString stringWithFormat:_(@"%@ — not implemented yet"), title];
-	label.textColor = UIColor.grayColor;
-	[vc.view addSubview:label];
-	[NSLayoutConstraint activateConstraints:@[
-		[label.centerXAnchor constraintEqualToAnchor:vc.view.centerXAnchor],
-		[label.centerYAnchor constraintEqualToAnchor:vc.view.centerYAnchor],
-	]];
-	return vc;
-}
-
-- (UIViewController *)settingsPlaceholder {
-	UIViewController *vc = [self placeholderWithTitle:_(@"Settings")];
-
-	UIButton *logoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
-	[logoutButton setTitle:_(@"Log Out") forState:UIControlStateNormal];
-	logoutButton.translatesAutoresizingMaskIntoConstraints = NO;
-	[logoutButton addTarget:self action:@selector(logoutTapped) forControlEvents:UIControlEventTouchUpInside];
-	[vc.view addSubview:logoutButton];
-	[NSLayoutConstraint activateConstraints:@[
-		[logoutButton.centerXAnchor constraintEqualToAnchor:vc.view.centerXAnchor],
-		[logoutButton.topAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor constant:24],
-	]];
-	return vc;
-}
-
-- (void)logoutTapped {
-	[IMAuthApi logoutWithCompletion:^{
+- (void)prefetchTabData {
+	[IMAlbumApi allAlbumsWithCompletion:^(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error) {
+	}];
+	[IMSearchApi allPeopleWithCompletion:^(NSArray<IMPerson *> *_Nullable people, NSError *_Nullable error) {
+	}];
+	[IMSearchApi assetsByCityWithCompletion:^(NSArray<IMAsset *> *_Nullable assets, NSArray<NSString *> *_Nullable cityNames,
+	                                          NSError *_Nullable error) {
+	}];
+	[IMUserApi currentUserWithCompletion:^(IMUser *_Nullable user, NSError *_Nullable error) {
+	}];
+	[IMServerApi serverVersionWithCompletion:^(NSString *_Nullable versionString, NSError *_Nullable error) {
+	}];
+	[IMServerApi serverStorageWithCompletion:^(IMServerStorage *_Nullable storage, NSError *_Nullable error) {
 	}];
 }
 

@@ -7,6 +7,10 @@ static id IMValueOrNil(id value) {
 
 @implementation IMSearchApi
 
+static NSArray<IMPerson *> *sCachedPeople;
+static NSArray<IMAsset *> *sCachedPlaceAssets;
+static NSArray<NSString *> *sCachedPlaceCityNames;
+
 #pragma mark - Asset search
 
 + (nullable NSURLSessionTask *)postSearch:(NSString *)path
@@ -67,8 +71,14 @@ static id IMValueOrNil(id value) {
 			    return;
 		    }
 		    id peopleValue = IMValueOrNil(((NSDictionary *)json)[@"people"]);
-		    completion([IMPerson peopleWithArray:[peopleValue isKindOfClass:[NSArray class]] ? peopleValue : @[]], nil);
+		    NSArray<IMPerson *> *people = [IMPerson peopleWithArray:[peopleValue isKindOfClass:[NSArray class]] ? peopleValue : @[]];
+		    sCachedPeople = people;
+		    completion(people, nil);
 	    }];
+}
+
++ (NSArray<IMPerson *> *)cachedPeople {
+	return sCachedPeople ?: @[];
 }
 
 + (nullable NSURLSessionTask *)thumbnailDataForPersonId:(NSString *)personId
@@ -108,8 +118,18 @@ static id IMValueOrNil(id value) {
 			    [assets addObject:asset];
 			    [cities addObject:city];
 		    }
+		    sCachedPlaceAssets = assets;
+		    sCachedPlaceCityNames = cities;
 		    completion(assets, cities, nil);
 	    }];
+}
+
++ (NSArray<IMAsset *> *)cachedPlaceAssets {
+	return sCachedPlaceAssets ?: @[];
+}
+
++ (NSArray<NSString *> *)cachedPlaceCityNames {
+	return sCachedPlaceCityNames ?: @[];
 }
 
 @end

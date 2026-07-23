@@ -1,6 +1,7 @@
 #import "IMPlaceCell.h"
 #import "IMThumbCache.h"
 #import "IMAssetApi.h"
+#import "IMPrefs.h"
 
 NSString *const IMPlaceCellReuseIdentifier = @"IMPlaceCell";
 
@@ -73,7 +74,7 @@ NSString *const IMPlaceCellReuseIdentifier = @"IMPlaceCell";
 	NSString *assetId = asset.assetId;
 	__weak typeof(self) weakSelf = self;
 	self.thumbTask = [[IMThumbCache shared] thumbnailForAssetId:assetId
-	                                                         size:IMAssetMediaSizeThumbnail
+	                                                         size:[IMPrefs shared].thumbnailQuality
 	                                                   completion:^(UIImage *_Nullable image) {
 		    weakSelf.imageView.image = image;
 	    }];

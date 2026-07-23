@@ -8,6 +8,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (void)allAlbumsWithCompletion:(void (^)(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error))completion;
 
++ (NSArray<IMAlbum *> *)cachedAlbums;
+
 + (void)createAlbumWithName:(NSString *)name
                    completion:(void (^)(IMAlbum *_Nullable album, NSError *_Nullable error))completion;
 

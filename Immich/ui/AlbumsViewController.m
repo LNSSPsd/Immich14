@@ -74,6 +74,10 @@ static const CGFloat kLabelsHeight = 44;
 		[self.emptyLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
 		[self.emptyLabel.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
 	]];
+
+	self.albums = [IMAlbumApi cachedAlbums];
+	[self.collectionView reloadData];
+	self.emptyLabel.hidden = self.albums.count > 0;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
