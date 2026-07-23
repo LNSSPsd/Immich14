@@ -1,0 +1,4 @@
+Immich/build/
+build/
+*.ipa
+*.o
