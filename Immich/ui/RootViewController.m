@@ -4,6 +4,7 @@
 #import "IMSession.h"
 #import "TimelineViewController.h"
 #import "SearchViewController.h"
+#import "AlbumsViewController.h"
 
 @implementation RootViewController
 
@@ -22,6 +23,8 @@
 			vc = [[TimelineViewController alloc] init];
 		} else if ([title isEqualToString:_(@"Search")]) {
 			vc = [[SearchViewController alloc] init];
+		} else if ([title isEqualToString:_(@"Albums")]) {
+			vc = [[AlbumsViewController alloc] init];
 		} else {
 			vc = [self placeholderWithTitle:title];
 		}

@@ -1,5 +1,6 @@
 #import "AssetViewController.h"
 #import "AssetDetailViewController.h"
+#import "AddToAlbumViewController.h"
 #import "IMAssetApi.h"
 #import "IMThumbCache.h"
 #import "common.h"
@@ -477,6 +478,7 @@
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
 @property (nonatomic, strong) UIButton *ocrButton;
+@property (nonatomic, strong) UIButton *addToAlbumButton;
 @property (nonatomic) BOOL ocrOn;
 @end
 
@@ -539,6 +541,10 @@
 	self.bottomBar = [self blurBar];
 	[self.view addSubview:self.bottomBar];
 
+	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
+	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
+	[self.bottomBar.contentView addSubview:self.addToAlbumButton];
+
 	UIButton *infoButton = [self chromeButtonWithSymbol:@"info.circle"];
 	[infoButton addTarget:self action:@selector(infoTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:infoButton];
@@ -562,10 +568,13 @@
 		[self.bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 		[self.bottomBar.topAnchor constraintEqualToAnchor:infoButton.topAnchor constant:-10],
 
-		[infoButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor constant:-36],
+		[self.addToAlbumButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+		[self.addToAlbumButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+
+		[infoButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
 		[infoButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-6],
 
-		[self.ocrButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor constant:36],
+		[self.ocrButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
 		[self.ocrButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
 	]];
 }
@@ -596,6 +605,13 @@
 	IMAsset *asset = self.assets[self.currentIndex];
 	AssetDetailViewController *detail = [AssetDetailViewController detailViewControllerForAssetId:asset.assetId];
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:detail];
+	[self presentViewController:nav animated:YES completion:nil];
+}
+
+- (void)addToAlbumTapped {
+	IMAsset *asset = self.assets[self.currentIndex];
+	AddToAlbumViewController *picker = [AddToAlbumViewController pickerForAssetId:asset.assetId];
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:picker];
 	[self presentViewController:nav animated:YES completion:nil];
 }
 

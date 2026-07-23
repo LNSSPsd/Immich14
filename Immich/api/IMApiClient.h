@@ -22,6 +22,7 @@ typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
                 completion:(IMJSONHandler)completion;
 
 - (NSURLSessionTask *)PUT:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion;
+- (NSURLSessionTask *)PATCH:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion;
 - (NSURLSessionTask *)DELETE:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion;
 
 - (NSURLSessionTask *)getData:(NSString *)path

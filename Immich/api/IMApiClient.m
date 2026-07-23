@@ -194,6 +194,15 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"PUT" body:body] completion:completion];
 }
 
+- (NSURLSessionTask *)PATCH:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
+	NSURL *url = [self URLForPath:path query:nil];
+	if (!url) {
+		completion(nil, [self invalidURLError]);
+		return nil;
+	}
+	return [self dataTaskWithRequest:[self requestWithURL:url method:@"PATCH" body:body] completion:completion];
+}
+
 - (NSURLSessionTask *)DELETE:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
