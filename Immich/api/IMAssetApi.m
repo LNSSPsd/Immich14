@@ -55,4 +55,51 @@ NSString *const IMAssetMediaSizePreview = @"preview";
 	return [[IMApiClient shared] getData:path query:@{ @"size": size } completion:completion];
 }
 
++ (nullable NSURLSessionTask *)originalDataForAssetId:(NSString *)assetId
+                                            completion:(void (^)(NSData *_Nullable data, NSError *_Nullable error))completion {
+	NSString *path = [NSString stringWithFormat:@"/assets/%@/original", assetId];
+	return [[IMApiClient shared] getData:path query:nil completion:completion];
+}
+
++ (nullable NSURLSessionTask *)videoPlaybackDataForAssetId:(NSString *)assetId
+                                                 completion:(void (^)(NSData *_Nullable data, NSError *_Nullable error))completion {
+	NSString *path = [NSString stringWithFormat:@"/assets/%@/video/playback", assetId];
+	return [[IMApiClient shared] getData:path query:nil completion:completion];
+}
+
++ (void)assetDetailForAssetId:(NSString *)assetId
+                    completion:(void (^)(IMAssetDetail *_Nullable detail, NSError *_Nullable error))completion {
+	NSString *path = [NSString stringWithFormat:@"/assets/%@", assetId];
+	[[IMApiClient shared] GET:path
+	                     query:nil
+	                completion:^(id _Nullable json, NSError *_Nullable error) {
+		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
+			    completion(nil, error);
+			    return;
+		    }
+		    completion([[IMAssetDetail alloc] initWithDictionary:(NSDictionary *)json], nil);
+	    }];
+}
+
++ (void)ocrLinesForAssetId:(NSString *)assetId
+                 completion:(void (^)(NSArray<IMOcrLine *> *_Nullable lines, NSError *_Nullable error))completion {
+	NSString *path = [NSString stringWithFormat:@"/assets/%@/ocr", assetId];
+	[[IMApiClient shared] GET:path
+	                     query:nil
+	                completion:^(id _Nullable json, NSError *_Nullable error) {
+		    if (error || ![json isKindOfClass:[NSArray class]]) {
+			    completion(nil, error);
+			    return;
+		    }
+		    NSMutableArray<IMOcrLine *> *lines = [NSMutableArray array];
+		    for (NSDictionary *dict in (NSArray *)json) {
+			    IMOcrLine *line = [IMOcrLine lineWithDictionary:dict];
+			    if (line) {
+				    [lines addObject:line];
+			    }
+		    }
+		    completion(lines, nil);
+	    }];
+}
+
 @end

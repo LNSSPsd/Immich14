@@ -1,6 +1,7 @@
 #import "TimelineViewController.h"
 #import "TimelineCell.h"
 #import "IMAssetApi.h"
+#import "AssetViewController.h"
 #import "IMDatabase.h"
 #import "common.h"
 
@@ -248,6 +249,19 @@ static const CGFloat kCellSpacing = 2;
 	CGFloat width = collectionView.bounds.size.width;
 	CGFloat side = (width - (kColumns - 1) * kCellSpacing) / kColumns;
 	return CGSizeMake(side, side);
+}
+
+#pragma mark - UICollectionViewDelegate
+
+- (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
+	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
+	NSString *bucket = self.bucketDates[indexPath.section];
+	NSArray<IMAsset *> *assets = self.bucketAssets[bucket];
+	if (!assets || (NSUInteger)indexPath.item >= assets.count) {
+		return;
+	}
+	AssetViewController *viewer = [AssetViewController viewerWithAssets:assets startIndex:indexPath.item];
+	[self presentViewController:viewer animated:YES completion:nil];
 }
 
 @end
