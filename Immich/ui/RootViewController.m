@@ -3,6 +3,7 @@
 #import "IMAuthApi.h"
 #import "IMSession.h"
 #import "TimelineViewController.h"
+#import "SearchViewController.h"
 
 @implementation RootViewController
 
@@ -19,6 +20,8 @@
 			vc = [self settingsPlaceholder];
 		} else if ([title isEqualToString:_(@"Timeline")]) {
 			vc = [[TimelineViewController alloc] init];
+		} else if ([title isEqualToString:_(@"Search")]) {
+			vc = [[SearchViewController alloc] init];
 		} else {
 			vc = [self placeholderWithTitle:title];
 		}

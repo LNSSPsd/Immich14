@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (NSArray<IMAsset *> *)assetsFromTimeBucketJSON:(NSDictionary *)json;
 
++ (nullable instancetype)assetWithResponseDictionary:(NSDictionary *)dict;
++ (NSArray<IMAsset *> *)assetsWithResponseArray:(NSArray *)array;
+
 + (instancetype)assetWithId:(NSString *)assetId
               fileCreatedAt:(NSString *)fileCreatedAt
                    favorite:(BOOL)favorite

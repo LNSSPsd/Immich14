@@ -1,5 +1,9 @@
 #import "IMAsset.h"
 
+static id IMValueOrNil(id value) {
+	return [value isKindOfClass:[NSNull class]] ? nil : value;
+}
+
 @interface IMAsset ()
 @property (nonatomic, copy) NSString *assetId;
 @property (nonatomic, copy) NSString *fileCreatedAt;
@@ -33,6 +37,46 @@
 		asset.durationMs = [durationValue isKindOfClass:[NSNumber class]] ? [durationValue integerValue] : 0;
 		asset.ratio = (i < ratio.count) ? [ratio[i] doubleValue] : 1.0;
 		[assets addObject:asset];
+	}
+	return assets;
+}
+
++ (nullable instancetype)assetWithResponseDictionary:(NSDictionary *)dict {
+	if (![dict isKindOfClass:[NSDictionary class]]) {
+		return nil;
+	}
+	NSString *assetId = IMValueOrNil(dict[@"id"]);
+	if (![assetId isKindOfClass:[NSString class]] || assetId.length == 0) {
+		return nil;
+	}
+
+	IMAsset *asset = [[IMAsset alloc] init];
+	asset.assetId = assetId;
+	id fileCreatedAt = IMValueOrNil(dict[@"fileCreatedAt"]);
+	asset.fileCreatedAt = [fileCreatedAt isKindOfClass:[NSString class]] ? fileCreatedAt : @"";
+	id favorite = IMValueOrNil(dict[@"isFavorite"]);
+	asset.favorite = [favorite isKindOfClass:[NSNumber class]] && [favorite boolValue];
+	asset.image = ![IMValueOrNil(dict[@"type"]) isEqual:@"VIDEO"];
+	id duration = IMValueOrNil(dict[@"duration"]);
+	asset.durationMs = [duration isKindOfClass:[NSNumber class]] ? [duration integerValue] : 0;
+	id widthValue = IMValueOrNil(dict[@"width"]);
+	id heightValue = IMValueOrNil(dict[@"height"]);
+	double width = [widthValue isKindOfClass:[NSNumber class]] ? [widthValue doubleValue] : 0;
+	double height = [heightValue isKindOfClass:[NSNumber class]] ? [heightValue doubleValue] : 0;
+	asset.ratio = height > 0 ? width / height : 1.0;
+	return asset;
+}
+
++ (NSArray<IMAsset *> *)assetsWithResponseArray:(NSArray *)array {
+	if (![array isKindOfClass:[NSArray class]]) {
+		return @[];
+	}
+	NSMutableArray<IMAsset *> *assets = [NSMutableArray arrayWithCapacity:array.count];
+	for (NSDictionary *dict in array) {
+		IMAsset *asset = [IMAsset assetWithResponseDictionary:dict];
+		if (asset) {
+			[assets addObject:asset];
+		}
 	}
 	return assets;
 }
