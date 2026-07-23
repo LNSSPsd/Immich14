@@ -2,6 +2,7 @@
 #import "common.h"
 #import "IMAuthApi.h"
 #import "IMSession.h"
+#import "TimelineViewController.h"
 
 @implementation RootViewController
 
@@ -13,8 +14,14 @@
 
 	NSMutableArray<UIViewController *> *tabs = [NSMutableArray array];
 	[titles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger i, BOOL *stop) {
-		UIViewController *vc = [title isEqualToString:_(@"Settings")] ? [self settingsPlaceholder]
-		                                                               : [self placeholderWithTitle:title];
+		UIViewController *vc;
+		if ([title isEqualToString:_(@"Settings")]) {
+			vc = [self settingsPlaceholder];
+		} else if ([title isEqualToString:_(@"Timeline")]) {
+			vc = [[TimelineViewController alloc] init];
+		} else {
+			vc = [self placeholderWithTitle:title];
+		}
 		UIImage *img = nil;
 		if (@available(iOS 13.0, *)) {
 			img = [UIImage systemImageNamed:symbols[i]];
