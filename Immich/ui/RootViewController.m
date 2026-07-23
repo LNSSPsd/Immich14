@@ -1,5 +1,7 @@
 #import "RootViewController.h"
 #import "common.h"
+#import "IMAuthApi.h"
+#import "IMSession.h"
 
 @implementation RootViewController
 
@@ -11,7 +13,8 @@
 
 	NSMutableArray<UIViewController *> *tabs = [NSMutableArray array];
 	[titles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger i, BOOL *stop) {
-		UIViewController *vc = [self placeholderWithTitle:title];
+		UIViewController *vc = [title isEqualToString:_(@"Settings")] ? [self settingsPlaceholder]
+		                                                               : [self placeholderWithTitle:title];
 		UIImage *img = nil;
 		if (@available(iOS 13.0, *)) {
 			img = [UIImage systemImageNamed:symbols[i]];
@@ -42,6 +45,26 @@
 		[label.centerYAnchor constraintEqualToAnchor:vc.view.centerYAnchor],
 	]];
 	return vc;
+}
+
+- (UIViewController *)settingsPlaceholder {
+	UIViewController *vc = [self placeholderWithTitle:_(@"Settings")];
+
+	UIButton *logoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	[logoutButton setTitle:_(@"Log Out") forState:UIControlStateNormal];
+	logoutButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[logoutButton addTarget:self action:@selector(logoutTapped) forControlEvents:UIControlEventTouchUpInside];
+	[vc.view addSubview:logoutButton];
+	[NSLayoutConstraint activateConstraints:@[
+		[logoutButton.centerXAnchor constraintEqualToAnchor:vc.view.centerXAnchor],
+		[logoutButton.topAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor constant:24],
+	]];
+	return vc;
+}
+
+- (void)logoutTapped {
+	[IMAuthApi logoutWithCompletion:^{
+	}];
 }
 
 @end

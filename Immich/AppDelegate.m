@@ -1,6 +1,9 @@
 #import "AppDelegate.h"
 #import "common.h"
 #import "RootViewController.h"
+#import "LoginViewController.h"
+#import "IMSession.h"
+#import "IMAuthApi.h"
 
 @implementation AppDelegate
 
@@ -15,11 +18,22 @@
 	       selector:@selector(sessionDidChange:)
 	           name:IMSessionDidChangeNotification
 	         object:nil];
+
+	if ([IMSession shared].isLoggedIn) {
+		[IMAuthApi validateTokenWithCompletion:^(BOOL valid) {
+			if (!valid) {
+				[[IMSession shared] logout]; 
+			}
+		}];
+	}
 	return YES;
 }
 
 - (UIViewController *)rootViewController {
-	return [[RootViewController alloc] init];
+	if ([IMSession shared].isLoggedIn) {
+		return [[RootViewController alloc] init];
+	}
+	return [[UINavigationController alloc] initWithRootViewController:[[LoginViewController alloc] init]];
 }
 
 - (void)sessionDidChange:(NSNotification *)note {

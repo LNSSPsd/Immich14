@@ -1,4 +1,4 @@
-.PHONY: all clean
+.PHONY: all clean publish
 
 
 APP_NAME     := Immich14
@@ -10,6 +10,10 @@ IPHONEOS_DEPLOYMENT_TARGET := 14.0
 export IPHONEOS_DEPLOYMENT_TARGET
 
 THEOS ?= ~/theos
+
+PUBLISH_ROOT ?= /srv/http/files
+PUBLISH_DIR  := $(PUBLISH_ROOT)/immich14
+LOCAL_IP := $(shell ip addr | sed -n "s/.*inet \([0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\)[ \/].*/\1/p" | grep -v '^127\.' | head -1)
 CC    := $(THEOS)/toolchain/linux/iphone/bin/clang
 LDID  := $(THEOS)/toolchain/linux/iphone/bin/ldid
 
@@ -39,9 +43,11 @@ FRAMEWORKS := \
 	-framework Network \
 	-framework CoreServices
 
+INCLUDE_DIRS := . $(filter-out build/,$(wildcard */))
 CFLAGS := -Wno-deprecated-declarations -Wno-nullability-completeness -Werror \
 	-target arm64-apple-ios$(IPHONEOS_DEPLOYMENT_TARGET) \
 	-fobjc-arc -fconstant-cfstrings -isysroot $(SDKROOT) \
+	$(addprefix -I,$(INCLUDE_DIRS)) \
 	-DAPP_VERSION_STRING=\"$(APP_VERSION)\" -DAPP_COMMIT_HASH=\"$(COMMIT_HASH)\"
 LDFLAGS := -target arm64-apple-ios$(IPHONEOS_DEPLOYMENT_TARGET) \
 	-isysroot $(SDKROOT) $(LIBS) $(FRAMEWORKS) -Wl,-dead_strip_dylibs
@@ -82,6 +88,18 @@ $(APP_DIR)/Info.plist: Info.plist ../VERSION
 build/$(APP_NAME).ipa: $(BIN) $(APP_DIR)/Info.plist
 	cd build && rm -f $(APP_NAME).ipa && zip -qr $(APP_NAME).ipa Payload
 	@echo "Built build/$(APP_NAME).ipa (install + sign via TrollStore)"
+
+publish: build/$(APP_NAME).ipa
+	@mkdir -p $(PUBLISH_DIR)
+	cp build/$(APP_NAME).ipa $(PUBLISH_DIR)/$(APP_NAME).ipa
+	@printf '%s\n' \
+		'<html><head><meta name=viewport content="width=device-width,initial-scale=1">' \
+		'<title>$(DISPLAY_NAME)</title><style>a{font-size:80px}p{font-size:40px}</style></head><body>' \
+		'<a href="apple-magnifier://install?url=http%3A%2F%2F$(LOCAL_IP)%2Ffiles%2Fimmich14%2F$(APP_NAME).ipa">Install</a>' \
+		'<p>$(DISPLAY_NAME) $(APP_VERSION) ($(COMMIT_HASH))</p>' \
+		'<p>Latest Update: $(shell date)</p></body></html>' \
+		> $(PUBLISH_DIR)/index.html
+	@echo "Published: http://$(LOCAL_IP)/files/immich14/  (tap Install -> TrollStore)"
 
 clean:
 	rm -rf build/
