@@ -11,6 +11,8 @@ static id IMValueOrNil(id value) {
 @property (nonatomic, getter=isImage) BOOL image;
 @property (nonatomic) NSInteger durationMs;
 @property (nonatomic) double ratio;
+@property (nonatomic, copy) NSString *city;
+@property (nonatomic, copy) NSString *country;
 @end
 
 @implementation IMAsset
@@ -25,6 +27,8 @@ static id IMValueOrNil(id value) {
 	NSArray *isImage = json[@"isImage"];
 	NSArray *duration = json[@"duration"];
 	NSArray *ratio = json[@"ratio"];
+	NSArray *city = json[@"city"];
+	NSArray *country = json[@"country"];
 
 	NSMutableArray<IMAsset *> *assets = [NSMutableArray arrayWithCapacity:ids.count];
 	for (NSUInteger i = 0; i < ids.count; i++) {
@@ -36,6 +40,10 @@ static id IMValueOrNil(id value) {
 		id durationValue = (i < duration.count) ? duration[i] : nil;
 		asset.durationMs = [durationValue isKindOfClass:[NSNumber class]] ? [durationValue integerValue] : 0;
 		asset.ratio = (i < ratio.count) ? [ratio[i] doubleValue] : 1.0;
+		id cityValue = (i < city.count) ? IMValueOrNil(city[i]) : nil;
+		asset.city = [cityValue isKindOfClass:[NSString class]] ? cityValue : nil;
+		id countryValue = (i < country.count) ? IMValueOrNil(country[i]) : nil;
+		asset.country = [countryValue isKindOfClass:[NSString class]] ? countryValue : nil;
 		[assets addObject:asset];
 	}
 	return assets;
@@ -86,7 +94,9 @@ static id IMValueOrNil(id value) {
                    favorite:(BOOL)favorite
                       image:(BOOL)image
                  durationMs:(NSInteger)durationMs
-                      ratio:(double)ratio {
+                      ratio:(double)ratio
+                       city:(NSString *)city
+                    country:(NSString *)country {
 	IMAsset *asset = [[IMAsset alloc] init];
 	asset.assetId = assetId;
 	asset.fileCreatedAt = fileCreatedAt;
@@ -94,6 +104,8 @@ static id IMValueOrNil(id value) {
 	asset.image = image;
 	asset.durationMs = durationMs;
 	asset.ratio = ratio;
+	asset.city = city;
+	asset.country = country;
 	return asset;
 }
 

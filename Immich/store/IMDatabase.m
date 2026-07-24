@@ -52,6 +52,8 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 	            "  ratio REAL"
 	            ")"];
 	[self exec:@"CREATE INDEX IF NOT EXISTS idx_assets_bucket ON assets(timeBucket, position)"];
+	[self exec:@"ALTER TABLE assets ADD COLUMN city TEXT"];
+	[self exec:@"ALTER TABLE assets ADD COLUMN country TEXT"];
 	[self exec:@"CREATE TABLE IF NOT EXISTS sync_state ("
 	            "  deviceAssetId TEXT PRIMARY KEY,"
 	            "  assetId TEXT,"
@@ -118,8 +120,8 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_prepare_v2(self.db,
-	                    "INSERT INTO assets (id, timeBucket, position, fileCreatedAt, isFavorite, isImage, durationMs, ratio) "
-	                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+	                    "INSERT INTO assets (id, timeBucket, position, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country) "
+	                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	                    -1, &stmt, NULL);
 	for (NSUInteger i = 0; i < assets.count; i++) {
 		IMAsset *asset = assets[i];
@@ -131,6 +133,16 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		sqlite3_bind_int(stmt, 6, asset.isImage ? 1 : 0);
 		sqlite3_bind_int64(stmt, 7, (sqlite3_int64)asset.durationMs);
 		sqlite3_bind_double(stmt, 8, asset.ratio);
+		if (asset.city) {
+			sqlite3_bind_text(stmt, 9, [asset.city UTF8String], -1, SQLITE_TRANSIENT);
+		} else {
+			sqlite3_bind_null(stmt, 9);
+		}
+		if (asset.country) {
+			sqlite3_bind_text(stmt, 10, [asset.country UTF8String], -1, SQLITE_TRANSIENT);
+		} else {
+			sqlite3_bind_null(stmt, 10);
+		}
 		if (sqlite3_step(stmt) != SQLITE_DONE) {
 			NSLog(@"IMDatabase: insert asset failed: %s", sqlite3_errmsg(self.db));
 		}
@@ -145,7 +157,7 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_prepare_v2(self.db,
-	                    "SELECT id, fileCreatedAt, isFavorite, isImage, durationMs, ratio "
+	                    "SELECT id, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country "
 	                    "FROM assets WHERE timeBucket = ? ORDER BY position ASC",
 	                    -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, [timeBucket UTF8String], -1, SQLITE_TRANSIENT);
@@ -157,12 +169,18 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		BOOL isImage = sqlite3_column_int(stmt, 3) != 0;
 		NSInteger durationMs = (NSInteger)sqlite3_column_int64(stmt, 4);
 		double ratio = sqlite3_column_double(stmt, 5);
+		const char *cityC = (const char *)sqlite3_column_text(stmt, 6);
+		NSString *city = cityC ? [NSString stringWithUTF8String:cityC] : nil;
+		const char *countryC = (const char *)sqlite3_column_text(stmt, 7);
+		NSString *country = countryC ? [NSString stringWithUTF8String:countryC] : nil;
 		[assets addObject:[IMAsset assetWithId:assetId
 		                          fileCreatedAt:fileCreatedAt
 		                               favorite:isFavorite
 		                                  image:isImage
 		                             durationMs:durationMs
-		                                  ratio:ratio]];
+		                                  ratio:ratio
+		                                   city:city
+		                                country:country]];
 	}
 	sqlite3_finalize(stmt);
 

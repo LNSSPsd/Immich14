@@ -162,16 +162,14 @@
 }
 
 - (NSString *)formattedDate:(NSString *)iso8601 {
-	static NSISO8601DateFormatter *parser;
 	static NSDateFormatter *display;
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
-		parser = [[NSISO8601DateFormatter alloc] init];
 		display = [[NSDateFormatter alloc] init];
 		display.dateStyle = NSDateFormatterLongStyle;
 		display.timeStyle = NSDateFormatterShortStyle;
 	});
-	NSDate *date = [parser dateFromString:iso8601];
+	NSDate *date = IMDateFromServerTimestamp(iso8601);
 	return date ? [display stringFromDate:date] : iso8601;
 }
 

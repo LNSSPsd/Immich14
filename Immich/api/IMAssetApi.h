@@ -14,6 +14,8 @@ extern NSString *const IMAssetMediaSizePreview;
                                             NSArray<NSNumber *> *_Nullable counts,
                                             NSError *_Nullable error))completion;
 
++ (void)assetStatisticsWithCompletion:(void (^)(NSInteger images, NSInteger videos, NSError *_Nullable error))completion;
+
 + (void)assetsInTimeBucket:(NSString *)timeBucket
                  completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion;
 

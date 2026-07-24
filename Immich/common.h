@@ -24,6 +24,8 @@
 
 extern NSNotificationName const IMSessionDidChangeNotification; 
 
+extern NSDate *_Nullable IMDateFromServerTimestamp(NSString *_Nullable raw);
+
 #endif /* __OBJC__ */
 
 #endif /* IMMICH_COMMON_H */

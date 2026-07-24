@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly, getter=isImage) BOOL image; 
 @property (nonatomic, readonly) NSInteger durationMs; 
 @property (nonatomic, readonly) double ratio; 
+@property (nonatomic, copy, readonly, nullable) NSString *city; 
+@property (nonatomic, copy, readonly, nullable) NSString *country;
 
 + (NSArray<IMAsset *> *)assetsFromTimeBucketJSON:(NSDictionary *)json;
 
@@ -21,7 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
                    favorite:(BOOL)favorite
                       image:(BOOL)image
                  durationMs:(NSInteger)durationMs
-                      ratio:(double)ratio;
+                      ratio:(double)ratio
+                       city:(nullable NSString *)city
+                    country:(nullable NSString *)country;
 
 @end
 

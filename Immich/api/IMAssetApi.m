@@ -35,6 +35,23 @@ NSString *const IMAssetMediaSizePreview = @"preview";
 	    }];
 }
 
++ (void)assetStatisticsWithCompletion:(void (^)(NSInteger images, NSInteger videos, NSError *_Nullable error))completion {
+	[[IMApiClient shared] GET:@"/assets/statistics"
+	                     query:@{ @"visibility": @"timeline", @"isTrashed": @"false" }
+	                completion:^(id _Nullable json, NSError *_Nullable error) {
+		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
+			    completion(0, 0, error);
+			    return;
+		    }
+		    NSDictionary *stats = (NSDictionary *)json;
+		    NSNumber *images = stats[@"images"];
+		    NSNumber *videos = stats[@"videos"];
+		    completion([images isKindOfClass:[NSNumber class]] ? images.integerValue : 0,
+		               [videos isKindOfClass:[NSNumber class]] ? videos.integerValue : 0,
+		               nil);
+	    }];
+}
+
 + (void)assetsInTimeBucket:(NSString *)timeBucket
                  completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion {
 	[[IMApiClient shared] GET:@"/timeline/bucket"
