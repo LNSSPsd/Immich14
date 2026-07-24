@@ -22,6 +22,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL wifiOnlyUpload; 
 @property (nonatomic, copy) NSString *thumbnailQuality; 
 @property (nonatomic) BOOL allowInsecureTLS; 
+@property (nonatomic) BOOL backupEnabled; 
 
 @end
 

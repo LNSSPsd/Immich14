@@ -1,6 +1,8 @@
 #import "IMDatabase.h"
 #import <sqlite3.h>
 
+NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChangeNotification";
+
 @interface IMDatabase ()
 @property (nonatomic) sqlite3 *db;
 @end
@@ -50,6 +52,11 @@
 	            "  ratio REAL"
 	            ")"];
 	[self exec:@"CREATE INDEX IF NOT EXISTS idx_assets_bucket ON assets(timeBucket, position)"];
+	[self exec:@"CREATE TABLE IF NOT EXISTS sync_state ("
+	            "  deviceAssetId TEXT PRIMARY KEY,"
+	            "  assetId TEXT,"
+	            "  state INTEGER NOT NULL"
+	            ")"];
 }
 
 - (void)exec:(NSString *)sql {
@@ -160,6 +167,91 @@
 	sqlite3_finalize(stmt);
 
 	return assets;
+}
+
+#pragma mark - Sync state (Phase 7)
+
+- (void)setSyncState:(IMSyncState)state
+              assetId:(nullable NSString *)assetId
+    forDeviceAssetId:(NSString *)deviceAssetId {
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db,
+	                    "INSERT INTO sync_state (deviceAssetId, assetId, state) VALUES (?, ?, ?) "
+	                    "ON CONFLICT(deviceAssetId) DO UPDATE SET assetId = excluded.assetId, state = excluded.state",
+	                    -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, [deviceAssetId UTF8String], -1, SQLITE_TRANSIENT);
+	if (assetId) {
+		sqlite3_bind_text(stmt, 2, [assetId UTF8String], -1, SQLITE_TRANSIENT);
+	} else {
+		sqlite3_bind_null(stmt, 2);
+	}
+	sqlite3_bind_int(stmt, 3, (int)state);
+	BOOL ok = sqlite3_step(stmt) == SQLITE_DONE;
+	if (!ok) {
+		NSLog(@"IMDatabase: set sync state failed: %s", sqlite3_errmsg(self.db));
+	}
+	sqlite3_finalize(stmt);
+	if (ok) {
+		[[NSNotificationCenter defaultCenter] postNotificationName:IMSyncStateDidChangeNotification object:self];
+	}
+}
+
+- (IMSyncState)syncStateForDeviceAssetId:(NSString *)deviceAssetId {
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db, "SELECT state FROM sync_state WHERE deviceAssetId = ?", -1, &stmt, NULL);
+	sqlite3_bind_text(stmt, 1, [deviceAssetId UTF8String], -1, SQLITE_TRANSIENT);
+	IMSyncState state = IMSyncStateUnknown;
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		state = (IMSyncState)sqlite3_column_int(stmt, 0);
+	}
+	sqlite3_finalize(stmt);
+	return state;
+}
+
+- (void)syncStateCountsLocalOnly:(NSInteger *)outLocalOnly synced:(NSInteger *)outSynced {
+	NSInteger localOnly = 0, synced = 0;
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db, "SELECT state, COUNT(*) FROM sync_state GROUP BY state", -1, &stmt, NULL);
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		IMSyncState state = (IMSyncState)sqlite3_column_int(stmt, 0);
+		int count = sqlite3_column_int(stmt, 1);
+		if (state == IMSyncStateLocalOnly) {
+			localOnly = count;
+		} else if (state == IMSyncStateSynced) {
+			synced = count;
+		}
+	}
+	sqlite3_finalize(stmt);
+	if (outLocalOnly) {
+		*outLocalOnly = localOnly;
+	}
+	if (outSynced) {
+		*outSynced = synced;
+	}
+}
+
+- (NSArray<NSString *> *)deviceAssetIdsWithState:(IMSyncState)state {
+	NSMutableArray<NSString *> *ids = [NSMutableArray array];
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db, "SELECT deviceAssetId FROM sync_state WHERE state = ?", -1, &stmt, NULL);
+	sqlite3_bind_int(stmt, 1, (int)state);
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		[ids addObject:[NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 0)]];
+	}
+	sqlite3_finalize(stmt);
+	return ids;
+}
+
+- (NSDictionary<NSString *, NSNumber *> *)allDeviceAssetSyncStates {
+	NSMutableDictionary<NSString *, NSNumber *> *states = [NSMutableDictionary dictionary];
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db, "SELECT deviceAssetId, state FROM sync_state", -1, &stmt, NULL);
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		NSString *deviceAssetId = [NSString stringWithUTF8String:(const char *)sqlite3_column_text(stmt, 0)];
+		states[deviceAssetId] = @(sqlite3_column_int(stmt, 1));
+	}
+	sqlite3_finalize(stmt);
+	return states;
 }
 
 @end

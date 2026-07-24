@@ -102,4 +102,86 @@ NSString *const IMAssetMediaSizePreview = @"preview";
 	    }];
 }
 
++ (void)bulkUploadCheckWithItems:(NSArray<NSDictionary<NSString *, NSString *> *> *)items
+                       completion:(void (^)(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
+                                             NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
+                                             NSError *_Nullable error))completion {
+	[[IMApiClient shared] POST:@"/assets/bulk-upload-check"
+	                       body:@{ @"assets": items }
+	                 completion:^(id _Nullable json, NSError *_Nullable error) {
+		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
+			    completion(nil, nil, error);
+			    return;
+		    }
+		    NSArray *results = ((NSDictionary *)json)[@"results"];
+		    if (![results isKindOfClass:[NSArray class]]) {
+			    completion(nil, nil, error);
+			    return;
+		    }
+		    NSMutableDictionary<NSString *, NSString *> *actions = [NSMutableDictionary dictionaryWithCapacity:results.count];
+		    NSMutableDictionary<NSString *, NSString *> *matchedIds = [NSMutableDictionary dictionary];
+		    for (NSDictionary *entry in results) {
+			    if (![entry isKindOfClass:[NSDictionary class]]) {
+				    continue;
+			    }
+			    NSString *itemId = entry[@"id"];
+			    NSString *action = entry[@"action"];
+			    if (![itemId isKindOfClass:[NSString class]] || ![action isKindOfClass:[NSString class]]) {
+				    continue;
+			    }
+			    actions[itemId] = action;
+			    NSString *assetId = entry[@"assetId"];
+			    if ([assetId isKindOfClass:[NSString class]]) {
+				    matchedIds[itemId] = assetId;
+			    }
+		    }
+		    completion(actions, matchedIds, nil);
+	    }];
+}
+
++ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
+                                       filename:(NSString *)filename
+                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
+                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
+                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
+	NSDictionary<NSString *, NSString *> *fields = @{
+		@"filename": filename,
+		@"fileCreatedAt": fileCreatedAtISO8601,
+		@"fileModifiedAt": fileModifiedAtISO8601,
+	};
+	return [[IMApiClient shared] multipartPOST:@"/assets"
+	                                     fields:fields
+	                                  fileField:@"assetData"
+	                                   filename:filename
+	                                   fileData:fileData
+	                                 completion:^(id _Nullable json, NSError *_Nullable error) {
+		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
+			    completion(nil, error);
+			    return;
+		    }
+		    NSString *assetId = ((NSDictionary *)json)[@"id"];
+		    completion([assetId isKindOfClass:[NSString class]] ? assetId : nil, nil);
+	    }];
+}
+
++ (void)setFavorite:(BOOL)favorite
+       forAssetIds:(NSArray<NSString *> *)assetIds
+        completion:(void (^)(BOOL success, NSError *_Nullable error))completion {
+	[[IMApiClient shared] PUT:@"/assets"
+	                      body:@{ @"ids": assetIds, @"isFavorite": @(favorite) }
+	                completion:^(id _Nullable json, NSError *_Nullable error) {
+		    completion(error == nil, error);
+	    }];
+}
+
++ (void)deleteAssetIds:(NSArray<NSString *> *)assetIds
+                  force:(BOOL)force
+             completion:(void (^)(BOOL success, NSError *_Nullable error))completion {
+	[[IMApiClient shared] DELETE:@"/assets"
+	                         body:@{ @"ids": assetIds, @"force": @(force) }
+	                   completion:^(id _Nullable json, NSError *_Nullable error) {
+		    completion(error == nil, error);
+	    }];
+}
+
 @end

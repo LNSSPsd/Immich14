@@ -156,6 +156,9 @@ static const CGFloat kScopeBarHeight = 44;
 		self.emptyLabel.textColor = UIColor.grayColor;
 	}
 	self.emptyLabel.hidden = YES;
+	self.emptyLabel.numberOfLines = 0;
+	self.emptyLabel.userInteractionEnabled = YES;
+	[self.emptyLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(retryLastSearch)]];
 	[self.view addSubview:self.emptyLabel];
 
 	if (@available(iOS 13.0, *)) {
@@ -252,6 +255,12 @@ static const CGFloat kScopeBarHeight = 44;
 	    }];
 }
 
+- (void)retryLastSearch {
+	if (self.lastQuery.length > 0) {
+		[self performSearch:self.lastQuery];
+	}
+}
+
 - (void)scopeChanged {
 	if (self.lastQuery.length > 0) {
 		[self performSearch:self.lastQuery];
@@ -292,8 +301,11 @@ static const CGFloat kScopeBarHeight = 44;
 		strongSelf.searchTask = nil;
 		[strongSelf.activityIndicator stopAnimating];
 		if (error) {
+			strongSelf.emptyLabel.text = _(@"Search failed. Tap to retry.");
+			strongSelf.emptyLabel.hidden = NO;
 			return;
 		}
+		strongSelf.emptyLabel.text = _(@"No results.");
 		strongSelf.resultAssets = assets ?: @[];
 		[strongSelf.collectionView reloadData];
 		strongSelf.emptyLabel.hidden = strongSelf.resultAssets.count > 0;

@@ -1,5 +1,6 @@
 #import "AlbumDetailViewController.h"
 #import "IMAlbumApi.h"
+#import "IMBulkAssetActions.h"
 #import "TimelineCell.h"
 #import "AssetViewController.h"
 #import "common.h"
@@ -7,9 +8,18 @@
 @interface AlbumDetailViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property (nonatomic, strong) IMAlbum *album;
 @property (nonatomic, strong) UICollectionView *collectionView;
+@property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *activityIndicator;
 @property (nonatomic, copy) NSArray<IMAsset *> *assets;
+@property (nonatomic, strong) UIBarButtonItem *moreButton;
+
+@property (nonatomic) BOOL selecting;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, IMAsset *> *selectedAssets;
+@property (nonatomic, strong) UIBarButtonItem *favoriteButton;
+@property (nonatomic, strong) UIBarButtonItem *addAlbumButton;
+@property (nonatomic, strong) UIBarButtonItem *downloadButton;
+@property (nonatomic, strong) UIBarButtonItem *removeButton;
 @end
 
 @implementation AlbumDetailViewController
@@ -27,6 +37,7 @@ static const CGFloat kCellSpacing = 2;
 	self = [super init];
 	if (self) {
 		_assets = @[];
+		_selectedAssets = [NSMutableDictionary dictionary];
 	}
 	return self;
 }
@@ -39,9 +50,10 @@ static const CGFloat kCellSpacing = 2;
 	} else {
 		self.view.backgroundColor = UIColor.whiteColor;
 	}
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
-	                                                                                        target:self
-	                                                                                        action:@selector(moreTapped)];
+	self.moreButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
+	                                                                  target:self
+	                                                                  action:@selector(moreTapped)];
+	self.navigationItem.rightBarButtonItem = self.moreButton;
 
 	UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
 	layout.minimumInteritemSpacing = kCellSpacing;
@@ -62,6 +74,10 @@ static const CGFloat kCellSpacing = 2;
 	[self.collectionView addGestureRecognizer:longPress];
 	[self.view addSubview:self.collectionView];
 
+	self.refreshControl = [[UIRefreshControl alloc] init];
+	[self.refreshControl addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
+	self.collectionView.refreshControl = self.refreshControl;
+
 	self.emptyLabel = [[UILabel alloc] init];
 	self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	self.emptyLabel.text = _(@"No photos in this album yet.");
@@ -72,6 +88,9 @@ static const CGFloat kCellSpacing = 2;
 		self.emptyLabel.textColor = UIColor.grayColor;
 	}
 	self.emptyLabel.hidden = YES;
+	self.emptyLabel.numberOfLines = 0;
+	self.emptyLabel.userInteractionEnabled = YES;
+	[self.emptyLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(reload)]];
 	[self.view addSubview:self.emptyLabel];
 
 	if (@available(iOS 13.0, *)) {
@@ -109,9 +128,15 @@ static const CGFloat kCellSpacing = 2;
 			    return;
 		    }
 		    [strongSelf.activityIndicator stopAnimating];
+		    [strongSelf.refreshControl endRefreshing];
 		    if (error || !assets) {
+			    if (strongSelf.assets.count == 0) {
+				    strongSelf.emptyLabel.text = _(@"Couldn't load this album. Tap to retry.");
+				    strongSelf.emptyLabel.hidden = NO;
+			    }
 			    return;
 		    }
+		    strongSelf.emptyLabel.text = _(@"No photos in this album yet.");
 		    strongSelf.assets = assets;
 		    [strongSelf.collectionView reloadData];
 		    strongSelf.emptyLabel.hidden = assets.count > 0;
@@ -125,6 +150,13 @@ static const CGFloat kCellSpacing = 2;
 	                                                                 message:nil
 	                                                          preferredStyle:UIAlertControllerStyleActionSheet];
 	__weak typeof(self) weakSelf = self;
+	if (self.assets.count > 0) {
+		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Select Photos")
+		                                           style:UIAlertActionStyleDefault
+		                                         handler:^(UIAlertAction *_Nonnull action) {
+			    [weakSelf toggleSelecting];
+		    }]];
+	}
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Rename Album")
 	                                           style:UIAlertActionStyleDefault
 	                                         handler:^(UIAlertAction *_Nonnull action) {
@@ -190,10 +222,122 @@ static const CGFloat kCellSpacing = 2;
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+#pragma mark - Multi-select
+
+- (void)toggleSelecting {
+	self.selecting = !self.selecting;
+	[self.selectedAssets removeAllObjects];
+	for (NSIndexPath *indexPath in [self.collectionView.indexPathsForSelectedItems copy]) {
+		[self.collectionView deselectItemAtIndexPath:indexPath animated:NO];
+	}
+	self.collectionView.allowsMultipleSelection = self.selecting;
+	if (self.selecting) {
+		UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+		                                                                          target:self
+		                                                                          action:@selector(toggleSelecting)];
+		self.navigationItem.rightBarButtonItem = cancel;
+		self.toolbarItems = [self makeSelectionToolbarItems];
+	} else {
+		self.navigationItem.rightBarButtonItem = self.moreButton;
+	}
+	[self.navigationController setToolbarHidden:!self.selecting animated:YES];
+	[self.collectionView reloadData];
+	[self updateSelectionToolbarState];
+}
+
+- (NSArray<UIBarButtonItem *> *)makeSelectionToolbarItems {
+	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *removeImage = nil;
+	if (@available(iOS 13.0, *)) {
+		starImage = [UIImage systemImageNamed:@"star"];
+		albumImage = [UIImage systemImageNamed:@"plus.rectangle.on.folder"];
+		downloadImage = [UIImage systemImageNamed:@"square.and.arrow.down"];
+		removeImage = [UIImage systemImageNamed:@"minus.circle"];
+	}
+	self.favoriteButton = [[UIBarButtonItem alloc] initWithImage:starImage style:UIBarButtonItemStylePlain target:self action:@selector(favoriteSelected)];
+	self.addAlbumButton = [[UIBarButtonItem alloc] initWithImage:albumImage style:UIBarButtonItemStylePlain target:self action:@selector(addSelectedToAlbum)];
+	self.downloadButton = [[UIBarButtonItem alloc] initWithImage:downloadImage style:UIBarButtonItemStylePlain target:self action:@selector(downloadSelected)];
+	self.removeButton = [[UIBarButtonItem alloc] initWithImage:removeImage style:UIBarButtonItemStylePlain target:self action:@selector(removeSelectedFromAlbum)];
+	if (@available(iOS 13.0, *)) {
+		self.removeButton.tintColor = UIColor.systemRedColor;
+	}
+	UIBarButtonItem *flex1 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	UIBarButtonItem *flex2 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	UIBarButtonItem *flex3 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.removeButton ];
+}
+
+- (void)updateSelectionToolbarState {
+	BOOL hasSelection = self.selectedAssets.count > 0;
+	self.favoriteButton.enabled = hasSelection;
+	self.addAlbumButton.enabled = hasSelection;
+	self.downloadButton.enabled = hasSelection;
+	self.removeButton.enabled = hasSelection;
+	if (self.selecting) {
+		self.title = hasSelection ? [NSString stringWithFormat:_(@"%ld Selected"), (long)self.selectedAssets.count] : _(@"Select Items");
+	} else {
+		self.title = self.album.name;
+	}
+}
+
+- (void)favoriteSelected {
+	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	[IMBulkAssetActions favoriteAssets:assets
+	              presentingController:self
+	                         completion:^(BOOL success) {
+		    [self toggleSelecting];
+	    }];
+}
+
+- (void)downloadSelected {
+	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	[IMBulkAssetActions downloadAssets:assets
+	              presentingController:self
+	                         completion:^{
+		    [self toggleSelecting];
+	    }];
+}
+
+- (void)addSelectedToAlbum {
+	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	[self toggleSelecting];
+	[IMBulkAssetActions presentAddToAlbumForAssets:assets presentingController:self];
+}
+
+- (void)removeSelectedFromAlbum {
+	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	NSString *title = assets.count == 1 ? _(@"Remove 1 item from this album?")
+	                                     : [NSString stringWithFormat:_(@"Remove %ld items from this album?"), (long)assets.count];
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Remove")
+	                                           style:UIAlertActionStyleDestructive
+	                                         handler:^(UIAlertAction *_Nonnull action) {
+		    NSMutableArray<NSString *> *ids = [NSMutableArray arrayWithCapacity:assets.count];
+		    for (IMAsset *asset in assets) {
+			    [ids addObject:asset.assetId];
+		    }
+		    [IMAlbumApi removeAssetIds:ids
+		                  fromAlbumId:weakSelf.album.albumId
+		                   completion:^(BOOL success, NSError *_Nullable error) {
+			        typeof(self) strongSelf = weakSelf;
+			        if (!strongSelf || !success) {
+				        return;
+			        }
+			        NSMutableArray<IMAsset *> *remaining = [strongSelf.assets mutableCopy];
+			        [remaining removeObjectsInArray:assets];
+			        strongSelf.assets = remaining;
+			        [strongSelf toggleSelecting];
+			        strongSelf.emptyLabel.hidden = remaining.count > 0;
+		        }];
+	    }]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
 #pragma mark - Remove asset (long press)
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-	if (gesture.state != UIGestureRecognizerStateBegan) {
+	if (gesture.state != UIGestureRecognizerStateBegan || self.selecting) {
 		return;
 	}
 	CGPoint point = [gesture locationInView:self.collectionView];
@@ -247,6 +391,7 @@ static const CGFloat kCellSpacing = 2;
 	TimelineCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:TimelineCellReuseIdentifier
 	                                                                forIndexPath:indexPath];
 	[cell configureWithAsset:self.assets[indexPath.item]];
+	cell.selectionModeEnabled = self.selecting;
 	return cell;
 }
 
@@ -263,9 +408,26 @@ static const CGFloat kCellSpacing = 2;
 #pragma mark - UICollectionViewDelegate
 
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
-	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
-	AssetViewController *viewer = [AssetViewController viewerWithAssets:self.assets startIndex:indexPath.item];
-	[self presentViewController:viewer animated:YES completion:nil];
+	if (!self.selecting) {
+		[collectionView deselectItemAtIndexPath:indexPath animated:YES];
+		AssetViewController *viewer = [AssetViewController viewerWithAssets:self.assets startIndex:indexPath.item];
+		[self presentViewController:viewer animated:YES completion:nil];
+		return;
+	}
+	if ((NSUInteger)indexPath.item >= self.assets.count) {
+		return;
+	}
+	IMAsset *asset = self.assets[indexPath.item];
+	self.selectedAssets[asset.assetId] = asset;
+	[self updateSelectionToolbarState];
+}
+
+- (void)collectionView:(UICollectionView *)collectionView didDeselectItemAtIndexPath:(NSIndexPath *)indexPath {
+	if (!self.selecting || (NSUInteger)indexPath.item >= self.assets.count) {
+		return;
+	}
+	[self.selectedAssets removeObjectForKey:self.assets[indexPath.item].assetId];
+	[self updateSelectionToolbarState];
 }
 
 @end

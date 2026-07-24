@@ -6,6 +6,11 @@
 @property (atomic, nullable) NSURLSessionTask *networkTask;
 @end
 
+static NSUInteger IMDecodedByteCost(UIImage *image) {
+	CGFloat scale = image.scale > 0 ? image.scale : 1;
+	return (NSUInteger)(image.size.width * scale * image.size.height * scale * 4);
+}
+
 @implementation IMThumbCacheTask
 - (void)cancel {
 	self.cancelled = YES;
@@ -35,6 +40,7 @@
 	if (self) {
 		_memoryCache = [[NSCache alloc] init];
 		_memoryCache.countLimit = 500;
+		_memoryCache.totalCostLimit = 64 * 1024 * 1024; 
 		_ioQueue = dispatch_queue_create("com.lns.immich-ios-14.thumbcache", DISPATCH_QUEUE_CONCURRENT);
 
 		NSString *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
@@ -80,7 +86,7 @@
 		if (diskData) {
 			UIImage *diskImage = [UIImage imageWithData:diskData];
 			if (diskImage) {
-				[weakSelf.memoryCache setObject:diskImage forKey:key cost:diskData.length];
+				[weakSelf.memoryCache setObject:diskImage forKey:key cost:IMDecodedByteCost(diskImage)];
 			}
 			if (!task.cancelled) {
 				dispatch_async(dispatch_get_main_queue(), ^{
@@ -109,7 +115,7 @@
 				    dispatch_async(weakSelf.ioQueue, ^{
 					    UIImage *netImage = [UIImage imageWithData:data];
 					    if (netImage) {
-						    [weakSelf.memoryCache setObject:netImage forKey:key cost:data.length];
+						    [weakSelf.memoryCache setObject:netImage forKey:key cost:IMDecodedByteCost(netImage)];
 					    }
 					    [data writeToFile:path atomically:YES];
 					    if (!task.cancelled) {

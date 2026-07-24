@@ -4,6 +4,7 @@
 static NSString *const kKeyWifiOnlyUpload = @"IMPrefsWifiOnlyUpload";
 static NSString *const kKeyThumbnailQuality = @"IMPrefsThumbnailQuality";
 static NSString *const kKeyAllowInsecureTLS = @"IMPrefsAllowInsecureTLS";
+static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 
 @interface IMPrefs ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *backing;
@@ -32,6 +33,7 @@ static NSString *const kKeyAllowInsecureTLS = @"IMPrefsAllowInsecureTLS";
 			kKeyWifiOnlyUpload: @YES,
 			kKeyThumbnailQuality: IMAssetMediaSizeThumbnail,
 			kKeyAllowInsecureTLS: @NO,
+			kKeyBackupEnabled: @NO,
 		};
 		[defaultValues enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
 			if (self.backing[key] == nil) {
@@ -113,6 +115,14 @@ static NSString *const kKeyAllowInsecureTLS = @"IMPrefsAllowInsecureTLS";
 
 - (void)setAllowInsecureTLS:(BOOL)allowInsecureTLS {
 	[self setBool:allowInsecureTLS forKey:kKeyAllowInsecureTLS];
+}
+
+- (BOOL)backupEnabled {
+	return [self boolForKey:kKeyBackupEnabled];
+}
+
+- (void)setBackupEnabled:(BOOL)backupEnabled {
+	[self setBool:backupEnabled forKey:kKeyBackupEnabled];
 }
 
 @end

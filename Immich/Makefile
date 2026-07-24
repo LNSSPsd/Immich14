@@ -85,7 +85,14 @@ $(APP_DIR)/Info.plist: Info.plist ../VERSION
 	@mkdir -p $(@D)
 	sed 's/$$(APP_VERSION)/$(APP_VERSION)/g;s/$$(BUNDLE_ID)/$(BUNDLE_ID)/g;s/$$(DISPLAY_NAME)/$(DISPLAY_NAME)/g;s/$$(APP_NAME)/$(APP_NAME)/g;s/$$(COMMIT_HASH)/$(COMMIT_HASH)/g' Info.plist > $@
 
-build/$(APP_NAME).ipa: $(BIN) $(APP_DIR)/Info.plist
+ICON_FILES := $(wildcard AppIcon/*.png)
+ICON_TARGETS := $(addprefix $(APP_DIR)/,$(notdir $(ICON_FILES)))
+
+$(APP_DIR)/%.png: AppIcon/%.png
+	@mkdir -p $(@D)
+	cp $< $@
+
+build/$(APP_NAME).ipa: $(BIN) $(APP_DIR)/Info.plist $(ICON_TARGETS)
 	cd build && rm -f $(APP_NAME).ipa && zip -qr $(APP_NAME).ipa Payload
 	@echo "Built build/$(APP_NAME).ipa (install + sign via TrollStore)"
 

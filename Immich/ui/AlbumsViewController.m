@@ -6,6 +6,7 @@
 
 @interface AlbumsViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property (nonatomic, strong) UICollectionView *collectionView;
+@property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, copy) NSArray<IMAlbum *> *albums;
 @end
@@ -53,6 +54,10 @@ static const CGFloat kLabelsHeight = 44;
 	[self.collectionView registerClass:[IMAlbumCell class] forCellWithReuseIdentifier:IMAlbumCellReuseIdentifier];
 	[self.view addSubview:self.collectionView];
 
+	self.refreshControl = [[UIRefreshControl alloc] init];
+	[self.refreshControl addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
+	self.collectionView.refreshControl = self.refreshControl;
+
 	self.emptyLabel = [[UILabel alloc] init];
 	self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	self.emptyLabel.text = _(@"No albums yet.");
@@ -63,6 +68,9 @@ static const CGFloat kLabelsHeight = 44;
 		self.emptyLabel.textColor = UIColor.grayColor;
 	}
 	self.emptyLabel.hidden = YES;
+	self.emptyLabel.numberOfLines = 0;
+	self.emptyLabel.userInteractionEnabled = YES;
+	[self.emptyLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(reload)]];
 	[self.view addSubview:self.emptyLabel];
 
 	[NSLayoutConstraint activateConstraints:@[
@@ -89,9 +97,18 @@ static const CGFloat kLabelsHeight = 44;
 	__weak typeof(self) weakSelf = self;
 	[IMAlbumApi allAlbumsWithCompletion:^(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf || error || !albums) {
+		if (!strongSelf) {
 			return;
 		}
+		[strongSelf.refreshControl endRefreshing];
+		if (error || !albums) {
+			if (strongSelf.albums.count == 0) {
+				strongSelf.emptyLabel.text = _(@"Couldn't load albums. Tap to retry.");
+				strongSelf.emptyLabel.hidden = NO;
+			}
+			return;
+		}
+		strongSelf.emptyLabel.text = _(@"No albums yet.");
 		strongSelf.albums = albums;
 		[strongSelf.collectionView reloadData];
 		strongSelf.emptyLabel.hidden = albums.count > 0;

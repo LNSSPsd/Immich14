@@ -6,7 +6,7 @@ static NSString *const kNewAlbumCellId = @"newAlbum";
 static NSString *const kAlbumCellId = @"album";
 
 @interface AddToAlbumViewController () <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, copy) NSString *assetId;
+@property (nonatomic, copy) NSArray<NSString *> *assetIds;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSArray<IMAlbum *> *albums;
@@ -15,8 +15,12 @@ static NSString *const kAlbumCellId = @"album";
 @implementation AddToAlbumViewController
 
 + (instancetype)pickerForAssetId:(NSString *)assetId {
+	return [self pickerForAssetIds:@[ assetId ]];
+}
+
++ (instancetype)pickerForAssetIds:(NSArray<NSString *> *)assetIds {
 	AddToAlbumViewController *vc = [[AddToAlbumViewController alloc] init];
-	vc.assetId = assetId;
+	vc.assetIds = assetIds;
 	vc.albums = @[];
 	return vc;
 }
@@ -74,7 +78,7 @@ static NSString *const kAlbumCellId = @"album";
 #pragma mark - Adding
 
 - (void)addToAlbumId:(NSString *)albumId {
-	[IMAlbumApi addAssetIds:@[ self.assetId ]
+	[IMAlbumApi addAssetIds:self.assetIds
 	              toAlbumId:albumId
 	             completion:^(BOOL success, NSError *_Nullable error) {
 	    }];
