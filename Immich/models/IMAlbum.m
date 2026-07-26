@@ -9,6 +9,7 @@ static id IMValueOrNil(id value) {
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic) NSInteger assetCount;
 @property (nonatomic, copy, nullable) NSString *thumbnailAssetId;
+@property (nonatomic, copy, nullable) NSString *order;
 @end
 
 @implementation IMAlbum
@@ -29,6 +30,20 @@ static id IMValueOrNil(id value) {
 	album.assetCount = [count isKindOfClass:[NSNumber class]] ? [count integerValue] : 0;
 	NSString *thumbnailAssetId = IMValueOrNil(dict[@"albumThumbnailAssetId"]);
 	album.thumbnailAssetId = [thumbnailAssetId isKindOfClass:[NSString class]] ? thumbnailAssetId : nil;
+	NSString *order = IMValueOrNil(dict[@"order"]);
+	if ([order isKindOfClass:[NSString class]] && ([order isEqualToString:@"asc"] || [order isEqualToString:@"desc"])) {
+		album.order = order;
+	}
+	return album;
+}
+
+- (instancetype)albumByAdjustingAssetCount:(NSInteger)delta {
+	IMAlbum *album = [[IMAlbum alloc] init];
+	album.albumId = self.albumId;
+	album.name = self.name;
+	album.assetCount = MAX((NSInteger)0, self.assetCount + delta);
+	album.thumbnailAssetId = self.thumbnailAssetId;
+	album.order = self.order;
 	return album;
 }
 

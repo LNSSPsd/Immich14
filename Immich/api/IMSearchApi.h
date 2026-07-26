@@ -25,6 +25,28 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSURLSessionTask *)metadataSearchWithCity:(NSString *)city
                                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion;
 
++ (nullable NSURLSessionTask *)smartSearchWithQuery:(NSString *)query
+                                                page:(NSInteger)page
+                                          completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithOcr:(NSString *)ocrText
+                                                 page:(NSInteger)page
+                                           completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithFilename:(NSString *)filename
+                                                      page:(NSInteger)page
+                                                completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithDescription:(NSString *)description
+                                                         page:(NSInteger)page
+                                                   completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithPersonId:(NSString *)personId
+                                                      page:(NSInteger)page
+                                                completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithCity:(NSString *)city
+                                                  page:(NSInteger)page
+                                            completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
+
++ (void)peopleAtPage:(NSInteger)page
+          completion:(void (^)(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error))completion;
+
 + (void)allPeopleWithCompletion:(void (^)(NSArray<IMPerson *> *_Nullable people, NSError *_Nullable error))completion;
 
 + (NSArray<IMPerson *> *)cachedPeople;

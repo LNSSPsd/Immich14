@@ -23,6 +23,11 @@ NS_ASSUME_NONNULL_BEGIN
                                          NSString *_Nullable filename,
                                          NSError *_Nullable error))completion;
 
+- (void)pairedLivePhotoVideoForAsset:(PHAsset *)asset
+                           completion:(void (^)(NSData *_Nullable data,
+                                                 NSString *_Nullable filename,
+                                                 NSError *_Nullable error))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

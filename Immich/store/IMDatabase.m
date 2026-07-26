@@ -187,6 +187,12 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 	return assets;
 }
 
+- (void)clearAllData {
+	[self exec:@"DELETE FROM buckets"];
+	[self exec:@"DELETE FROM assets"];
+	[self exec:@"DELETE FROM sync_state"];
+}
+
 #pragma mark - Sync state (Phase 7)
 
 - (void)setSyncState:(IMSyncState)state
@@ -210,6 +216,18 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 	}
 	sqlite3_finalize(stmt);
 	if (ok) {
+		[[NSNotificationCenter defaultCenter] postNotificationName:IMSyncStateDidChangeNotification object:self];
+	}
+}
+
+- (void)resetUploadingStates {
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_prepare_v2(self.db, "UPDATE sync_state SET state = ? WHERE state = ?", -1, &stmt, NULL);
+	sqlite3_bind_int(stmt, 1, (int)IMSyncStateLocalOnly);
+	sqlite3_bind_int(stmt, 2, (int)IMSyncStateUploading);
+	BOOL ok = sqlite3_step(stmt) == SQLITE_DONE;
+	sqlite3_finalize(stmt);
+	if (ok && sqlite3_changes(self.db) > 0) {
 		[[NSNotificationCenter defaultCenter] postNotificationName:IMSyncStateDidChangeNotification object:self];
 	}
 }

@@ -8,9 +8,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, readonly) NSString *name;
 @property (nonatomic, readonly) NSInteger assetCount;
 @property (nonatomic, copy, readonly, nullable) NSString *thumbnailAssetId;
+@property (nonatomic, copy, readonly, nullable) NSString *order;
 
 + (nullable instancetype)albumWithDictionary:(NSDictionary *)dict;
 + (NSArray<IMAlbum *> *)albumsWithArray:(NSArray *)array;
+
+- (instancetype)albumByAdjustingAssetCount:(NSInteger)delta;
 
 @end
 

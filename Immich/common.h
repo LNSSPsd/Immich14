@@ -24,7 +24,14 @@
 
 extern NSNotificationName const IMSessionDidChangeNotification; 
 
+extern NSNotificationName const IMServerAssetsDidChangeNotification;
+extern NSString *const IMChangedTimeBucketsUserInfoKey;
+
 extern NSDate *_Nullable IMDateFromServerTimestamp(NSString *_Nullable raw);
+
+extern NSInteger IMDurationMsFromJSONValue(id _Nullable value);
+
+extern NSString *_Nullable IMTimeBucketKeyForDate(NSDate *_Nullable date);
 
 #endif /* __OBJC__ */
 

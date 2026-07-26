@@ -1,6 +1,7 @@
 #import "IMAuthApi.h"
 #import "IMApiClient.h"
 #import "IMSession.h"
+#import "common.h"
 
 @implementation IMAuthApi
 
@@ -12,6 +13,7 @@
 	[client POST:@"/auth/login"
 	        body:@{ @"email": email, @"password": password }
 	  completion:^(id _Nullable json, NSError *_Nullable error) {
+		    [client invalidate];
 		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
 			    completion(NO, error);
 			    return;
@@ -22,7 +24,7 @@
 		    if (![token isKindOfClass:[NSString class]] || ![userId isKindOfClass:[NSString class]]) {
 			    completion(NO, [NSError errorWithDomain:IMApiErrorDomain
 			                                        code:0
-			                                    userInfo:@{ NSLocalizedDescriptionKey: @"Malformed login response." }]);
+			                                    userInfo:@{ NSLocalizedDescriptionKey: _(@"Malformed login response.") }]);
 			    return;
 		    }
 		    [[IMSession shared] startWithBaseURL:baseURL accessToken:token userId:userId];
@@ -30,15 +32,57 @@
 	    }];
 }
 
++ (void)loginWithBaseURL:(NSURL *)baseURL
+                   apiKey:(NSString *)apiKey
+               completion:(void (^)(BOOL success, NSError *_Nullable error))completion {
+	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
+	client.overrideAPIKey = apiKey;
+	[client GET:@"/users/me"
+	       query:nil
+	  completion:^(id _Nullable json, NSError *_Nullable error) {
+		    [client invalidate]; 
+		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
+			    completion(NO, error);
+			    return;
+		    }
+		    id userId = ((NSDictionary *)json)[@"id"];
+		    [[IMSession shared] startWithBaseURL:baseURL
+		                                   apiKey:apiKey
+		                                   userId:[userId isKindOfClass:[NSString class]] ? userId : nil];
+		    completion(YES, nil);
+	    }];
+}
+
 + (void)validateTokenWithCompletion:(void (^)(BOOL valid))completion {
+	[self validateSessionWithCompletion:^(BOOL valid, BOOL authRejected) {
+		completion(valid);
+	}];
+}
+
++ (void)validateSessionWithCompletion:(void (^)(BOOL valid, BOOL authRejected))completion {
+	if ([IMSession shared].authKind == IMSessionAuthKindAPIKey) {
+		[[IMApiClient shared] GET:@"/users/me"
+		                     query:nil
+		                completion:^(id _Nullable json, NSError *_Nullable error) {
+			    if (!error && [json isKindOfClass:[NSDictionary class]]) {
+				    completion(YES, NO);
+				    return;
+			    }
+			    NSInteger status = [IMApiClient HTTPStatusForError:error];
+			    completion(NO, status == 401 || status == 403);
+		    }];
+		return;
+	}
 	[[IMApiClient shared] POST:@"/auth/validateToken"
 	                       body:nil
 	                 completion:^(id _Nullable json, NSError *_Nullable error) {
-		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
-			    completion(NO);
+		    if (!error && [json isKindOfClass:[NSDictionary class]]) {
+			    BOOL valid = [json[@"authStatus"] boolValue];
+			    completion(valid, !valid); 
 			    return;
 		    }
-		    completion([json[@"authStatus"] boolValue]);
+		    NSInteger status = [IMApiClient HTTPStatusForError:error];
+		    completion(NO, status == 401 || status == 403);
 	    }];
 }
 

@@ -37,9 +37,6 @@ static NSString *const kActionCellId = @"action";
 @property (nonatomic) NSInteger totalCount;
 @property (nonatomic) NSInteger syncedCount;
 @property (nonatomic) NSInteger pendingUploadCount;
-@property (nonatomic) BOOL running;
-@property (nonatomic) NSInteger checkedSoFar;
-@property (nonatomic) NSInteger totalThisRun;
 @end
 
 @implementation SyncViewController
@@ -68,7 +65,35 @@ static NSString *const kActionCellId = @"action";
 
 	self.authStatus = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
 	self.totalCount = [[IMPhotoLibrary shared] totalAssetCount];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+	                                          selector:@selector(syncProgressed)
+	                                              name:IMForegroundSyncProgressNotification
+	                                            object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+	                                          selector:@selector(syncFinished:)
+	                                              name:IMForegroundSyncDidFinishNotification
+	                                            object:nil];
 	[self reloadCounts];
+}
+
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)syncProgressed {
+	[self reloadCounts];
+}
+
+- (void)syncFinished:(NSNotification *)note {
+	[self reloadCounts];
+	NSError *error = note.userInfo[IMForegroundSyncErrorUserInfoKey];
+	if (error && self.viewIfLoaded.window) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Sync Check Stopped")
+		                                                                 message:error.localizedDescription
+		                                                          preferredStyle:UIAlertControllerStyleAlert];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		[self presentViewController:alert animated:YES completion:nil];
+	}
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -131,37 +156,8 @@ static NSString *const kActionCellId = @"action";
 		[IMForegroundSync.shared cancel];
 		return;
 	}
-
-	self.running = YES;
-	self.checkedSoFar = 0;
-	self.totalThisRun = self.totalCount;
+	[IMForegroundSync.shared startWithProgress:nil completion:nil];
 	[self.tableView reloadData];
-
-	__weak typeof(self) weakSelf = self;
-	[IMForegroundSync.shared startWithProgress:^(NSInteger checked, NSInteger total) {
-		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf) {
-			    return;
-		    }
-		    strongSelf.checkedSoFar = checked;
-		    strongSelf.totalThisRun = total;
-		    [strongSelf reloadCounts];
-	    }
-	                                completion:^(NSError *_Nullable error) {
-		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf) {
-			    return;
-		    }
-		    strongSelf.running = NO;
-		    [strongSelf reloadCounts];
-		    if (error) {
-			    UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Sync Check Stopped")
-			                                                                     message:error.localizedDescription
-			                                                              preferredStyle:UIAlertControllerStyleAlert];
-			    [alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
-			    [strongSelf presentViewController:alert animated:YES completion:nil];
-		    }
-	    }];
 }
 
 #pragma mark - UITableViewDataSource
@@ -259,9 +255,10 @@ static NSString *const kActionCellId = @"action";
 			}
 		default: {
 			UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kActionCellId forIndexPath:indexPath];
-			if (self.running) {
+			if (IMForegroundSync.shared.isRunning) {
 				cell.textLabel.text = [NSString stringWithFormat:_(@"Cancel (%ld of %ld checked)"),
-				                                                  (long)self.checkedSoFar, (long)self.totalThisRun];
+				                                                  (long)IMForegroundSync.shared.checkedCount,
+				                                                  (long)IMForegroundSync.shared.totalCount];
 				if (@available(iOS 13.0, *)) {
 					cell.textLabel.textColor = UIColor.systemRedColor;
 				}

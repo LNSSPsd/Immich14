@@ -7,6 +7,7 @@
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, copy) NSArray<IMAsset *> *assets;
+@property (nonatomic, strong, nullable) NSURLSessionTask *pageTask;
 @end
 
 @implementation AssetGridViewController
@@ -90,6 +91,37 @@ static const CGFloat kCellSpacing = 2;
 	return cell;
 }
 
+#pragma mark - Pagination
+
+- (void)loadNextPageIfNeeded {
+	if (self.pageTask || !self.pageLoader || self.nextPageToken.length == 0) {
+		return;
+	}
+	NSInteger page = self.nextPageToken.integerValue;
+	if (page < 1) {
+		self.nextPageToken = nil;
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	self.pageTask = self.pageLoader(page, ^(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf) {
+			return;
+		}
+		strongSelf.pageTask = nil;
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+			return;
+		}
+		if (error || !assets) {
+			return;
+		}
+		strongSelf.assets = [strongSelf.assets arrayByAddingObjectsFromArray:assets];
+		strongSelf.nextPageToken = nextPage;
+		[strongSelf.collectionView reloadData];
+		strongSelf.emptyLabel.hidden = strongSelf.assets.count > 0;
+	});
+}
+
 #pragma mark - UICollectionViewDelegateFlowLayout
 
 - (CGSize)collectionView:(UICollectionView *)collectionView
@@ -101,6 +133,14 @@ static const CGFloat kCellSpacing = 2;
 }
 
 #pragma mark - UICollectionViewDelegate
+
+- (void)collectionView:(UICollectionView *)collectionView
+        willDisplayCell:(UICollectionViewCell *)cell
+    forItemAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.item + kColumns * 6 >= (NSInteger)self.assets.count) {
+		[self loadNextPageIfNeeded];
+	}
+}
 
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
 	[collectionView deselectItemAtIndexPath:indexPath animated:YES];

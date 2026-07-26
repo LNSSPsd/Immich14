@@ -161,11 +161,28 @@ NSString *const IMAssetMediaSizePreview = @"preview";
                                   fileCreatedAt:(NSString *)fileCreatedAtISO8601
                                  fileModifiedAt:(NSString *)fileModifiedAtISO8601
                                      completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
-	NSDictionary<NSString *, NSString *> *fields = @{
+	return [self uploadAssetData:fileData
+	                     filename:filename
+	                fileCreatedAt:fileCreatedAtISO8601
+	               fileModifiedAt:fileModifiedAtISO8601
+	             livePhotoVideoId:nil
+	                   completion:completion];
+}
+
++ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
+                                       filename:(NSString *)filename
+                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
+                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
+                               livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
+	NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionaryWithDictionary:@{
 		@"filename": filename,
 		@"fileCreatedAt": fileCreatedAtISO8601,
 		@"fileModifiedAt": fileModifiedAtISO8601,
-	};
+	}];
+	if (livePhotoVideoId) {
+		fields[@"livePhotoVideoId"] = livePhotoVideoId;
+	}
 	return [[IMApiClient shared] multipartPOST:@"/assets"
 	                                     fields:fields
 	                                  fileField:@"assetData"

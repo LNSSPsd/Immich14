@@ -23,4 +23,8 @@ static IMUser *sCachedUser;
 	return sCachedUser;
 }
 
++ (void)clearCachedUser {
+	sCachedUser = nil;
+}
+
 @end

@@ -55,9 +55,12 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 @property (nonatomic, strong) IMLoginTextField *serverField;
 @property (nonatomic, strong) IMLoginTextField *emailField;
 @property (nonatomic, strong) IMLoginTextField *passwordField;
+@property (nonatomic, strong) IMLoginTextField *apiKeyField;
 @property (nonatomic, strong) UIButton *loginButton;
+@property (nonatomic, strong) UIButton *authModeButton;
 @property (nonatomic, strong) UILabel *errorLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic) BOOL usingAPIKey; 
 @end
 
 @implementation LoginViewController
@@ -121,8 +124,16 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	self.passwordField.returnKeyType = UIReturnKeyGo;
 	[self configureField:self.passwordField];
 
+	self.apiKeyField = [[IMLoginTextField alloc] init];
+	self.apiKeyField.placeholder = _(@"API Key");
+	[self.apiKeyField setLeftSymbolName:@"key"];
+	self.apiKeyField.autocorrectionType = UITextAutocorrectionTypeNo;
+	self.apiKeyField.returnKeyType = UIReturnKeyGo;
+	[self configureField:self.apiKeyField];
+	self.apiKeyField.hidden = YES;
+
 	UIStackView *fieldStack = [[UIStackView alloc] initWithArrangedSubviews:@[
-		self.serverField, self.emailField, self.passwordField
+		self.serverField, self.emailField, self.passwordField, self.apiKeyField
 	]];
 	fieldStack.axis = UILayoutConstraintAxisVertical;
 	fieldStack.spacing = 12;
@@ -167,8 +178,14 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	[self.spinner.centerXAnchor constraintEqualToAnchor:self.loginButton.centerXAnchor].active = YES;
 	[self.spinner.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor].active = YES;
 
+	self.authModeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	[self.authModeButton setTitle:_(@"Use API Key") forState:UIControlStateNormal];
+	self.authModeButton.titleLabel.font = [UIFont systemFontOfSize:15];
+	self.authModeButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.authModeButton addTarget:self action:@selector(authModeTapped) forControlEvents:UIControlEventTouchUpInside];
+
 	UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
-		badge, titleLabel, subtitleLabel, fieldStack, self.errorLabel, self.loginButton
+		badge, titleLabel, subtitleLabel, fieldStack, self.errorLabel, self.loginButton, self.authModeButton
 	]];
 	stack.axis = UILayoutConstraintAxisVertical;
 	stack.alignment = UIStackViewAlignmentFill;
@@ -178,6 +195,7 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	[stack setCustomSpacing:36 afterView:subtitleLabel];
 	[stack setCustomSpacing:8 afterView:fieldStack];
 	[stack setCustomSpacing:20 afterView:self.errorLabel];
+	[stack setCustomSpacing:16 afterView:self.loginButton];
 	[self.contentView addSubview:stack];
 
 	[NSLayoutConstraint activateConstraints:@[
@@ -253,11 +271,24 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	}];
 }
 
+#pragma mark - Auth mode
+
+- (void)authModeTapped {
+	[self dismissKeyboard];
+	self.usingAPIKey = !self.usingAPIKey;
+	self.emailField.hidden = self.usingAPIKey;
+	self.passwordField.hidden = self.usingAPIKey;
+	self.apiKeyField.hidden = !self.usingAPIKey;
+	self.errorLabel.text = @"";
+	[self.authModeButton setTitle:self.usingAPIKey ? _(@"Use Email & Password") : _(@"Use API Key")
+	                      forState:UIControlStateNormal];
+}
+
 #pragma mark - UITextFieldDelegate
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
 	if (textField == self.serverField) {
-		[self.emailField becomeFirstResponder];
+		[(self.usingAPIKey ? self.apiKeyField : self.emailField) becomeFirstResponder];
 	} else if (textField == self.emailField) {
 		[self.passwordField becomeFirstResponder];
 	} else {
@@ -289,42 +320,61 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	[self dismissKeyboard];
 
 	NSURL *baseURL = [self normalizedBaseURLFromInput:self.serverField.text ?: @""];
-	NSString *email = [self.emailField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-	NSString *password = self.passwordField.text ?: @"";
-
 	if (!baseURL) {
 		self.errorLabel.text = _(@"Enter a server URL.");
 		return;
 	}
+
+	__weak typeof(self) weakSelf = self;
+	if (self.usingAPIKey) {
+		NSString *apiKey = [self.apiKeyField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+		if (apiKey.length == 0) {
+			self.errorLabel.text = _(@"Enter an API key.");
+			return;
+		}
+		[self beginLoginRequest];
+		[IMAuthApi loginWithBaseURL:baseURL
+		                      apiKey:apiKey
+		                  completion:^(BOOL success, NSError *_Nullable error) {
+			    [weakSelf finishLoginRequestWithSuccess:success error:error];
+		    }];
+		return;
+	}
+
+	NSString *email = [self.emailField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	NSString *password = self.passwordField.text ?: @"";
 	if (email.length == 0 || password.length == 0) {
 		self.errorLabel.text = _(@"Enter email and password.");
 		return;
 	}
-
-	self.errorLabel.text = @"";
-	self.loginButton.enabled = NO;
-	[self.loginButton setTitle:@"" forState:UIControlStateNormal];
-	[self.spinner startAnimating];
-
-	__weak typeof(self) weakSelf = self;
+	[self beginLoginRequest];
 	[IMAuthApi loginWithBaseURL:baseURL
 	                       email:email
 	                    password:password
 	                  completion:^(BOOL success, NSError *_Nullable error) {
-		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf) {
-			    return;
-		    }
-		    [strongSelf.spinner stopAnimating];
-		    strongSelf.loginButton.enabled = YES;
-		    [strongSelf.loginButton setTitle:_(@"Log In") forState:UIControlStateNormal];
-		    if (!success) {
-			    strongSelf.errorLabel.text = error.localizedDescription ?: _(@"Login failed.");
-			    return;
-		    }
-		    [[NSUserDefaults standardUserDefaults] setObject:strongSelf.serverField.text
-		                                               forKey:kLastServerURLDefaultsKey];
+		    [weakSelf finishLoginRequestWithSuccess:success error:error];
 	    }];
+}
+
+- (void)beginLoginRequest {
+	self.errorLabel.text = @"";
+	self.loginButton.enabled = NO;
+	self.authModeButton.enabled = NO;
+	[self.loginButton setTitle:@"" forState:UIControlStateNormal];
+	[self.spinner startAnimating];
+}
+
+- (void)finishLoginRequestWithSuccess:(BOOL)success error:(NSError *_Nullable)error {
+	[self.spinner stopAnimating];
+	self.loginButton.enabled = YES;
+	self.authModeButton.enabled = YES;
+	[self.loginButton setTitle:_(@"Log In") forState:UIControlStateNormal];
+	if (!success) {
+		self.errorLabel.text = error.localizedDescription ?: _(@"Login failed.");
+		return;
+	}
+	[[NSUserDefaults standardUserDefaults] setObject:self.serverField.text
+	                                           forKey:kLastServerURLDefaultsKey];
 }
 
 @end

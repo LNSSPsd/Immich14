@@ -1,5 +1,10 @@
 #import "IMSession.h"
 #import "common.h"
+#import "IMDatabase.h"
+#import "IMThumbCache.h"
+#import "IMUserApi.h"
+#import "IMServerApi.h"
+#import "IMPrefs.h"
 #import <Security/Security.h>
 
 static NSString *const kKeychainService = @"com.lns.immich-ios-14.session";
@@ -7,11 +12,14 @@ static NSString *const kKeychainAccount = @"accessToken";
 
 static NSString *const kDefaultsBaseURL = @"IMSessionBaseURL";
 static NSString *const kDefaultsUserId  = @"IMSessionUserId";
+static NSString *const kDefaultsAuthKind = @"IMSessionAuthKind"; // "apiKey"; absent => Bearer
+static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 
 @interface IMSession ()
 @property (nonatomic, copy, nullable) NSURL *baseURL;
 @property (nonatomic, copy, nullable) NSString *accessToken;
 @property (nonatomic, copy, nullable) NSString *userId;
+@property (nonatomic) IMSessionAuthKind authKind;
 @end
 
 @implementation IMSession
@@ -35,6 +43,9 @@ static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 			_baseURL = [NSURL URLWithString:urlString];
 			_accessToken = token;
 			_userId = [defaults stringForKey:kDefaultsUserId];
+			_authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
+			    ? IMSessionAuthKindAPIKey
+			    : IMSessionAuthKindBearer;
 		}
 	}
 	return self;
@@ -44,38 +55,74 @@ static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 	return self.baseURL != nil && self.accessToken.length > 0;
 }
 
-- (void)startWithBaseURL:(NSURL *)baseURL accessToken:(NSString *)token userId:(NSString *)userId {
+- (void)startWithBaseURL:(NSURL *)baseURL
+                  secret:(NSString *)secret
+                  userId:(nullable NSString *)userId
+                    kind:(IMSessionAuthKind)kind {
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults setObject:baseURL.absoluteString forKey:kDefaultsBaseURL];
-	[defaults setObject:userId forKey:kDefaultsUserId];
+	if (userId) {
+		[defaults setObject:userId forKey:kDefaultsUserId];
+	} else {
+		[defaults removeObjectForKey:kDefaultsUserId];
+	}
+	if (kind == IMSessionAuthKindAPIKey) {
+		[defaults setObject:kAuthKindAPIKeyValue forKey:kDefaultsAuthKind];
+	} else {
+		[defaults removeObjectForKey:kDefaultsAuthKind];
+	}
 
-	[self setKeychainToken:token];
+	[self setKeychainToken:secret];
 
 	self.baseURL = baseURL;
-	self.accessToken = token;
+	self.accessToken = secret;
 	self.userId = userId;
+	self.authKind = kind;
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];
+}
+
+- (void)startWithBaseURL:(NSURL *)baseURL accessToken:(NSString *)token userId:(NSString *)userId {
+	[self startWithBaseURL:baseURL secret:token userId:userId kind:IMSessionAuthKindBearer];
+}
+
+- (void)startWithBaseURL:(NSURL *)baseURL apiKey:(NSString *)apiKey userId:(nullable NSString *)userId {
+	[self startWithBaseURL:baseURL secret:apiKey userId:userId kind:IMSessionAuthKindAPIKey];
 }
 
 - (void)logout {
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults removeObjectForKey:kDefaultsBaseURL];
 	[defaults removeObjectForKey:kDefaultsUserId];
+	[defaults removeObjectForKey:kDefaultsAuthKind];
 	[self deleteKeychainToken];
 
 	self.baseURL = nil;
 	self.accessToken = nil;
 	self.userId = nil;
+	self.authKind = IMSessionAuthKindBearer;
+
+	[[IMDatabase shared] clearAllData];
+	[[IMThumbCache shared] clearWithCompletion:^{}];
+	[IMUserApi clearCachedUser];
+	[IMServerApi clearCached];
+	IMPrefs.shared.backupEnabled = NO;
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];
 }
 
 - (nullable NSString *)authorizationHeader {
-	if (self.accessToken.length == 0) {
+	if (self.accessToken.length == 0 || self.authKind != IMSessionAuthKindBearer) {
 		return nil;
 	}
 	return [NSString stringWithFormat:@"Bearer %@", self.accessToken];
+}
+
+- (nullable NSString *)apiKeyHeaderValue {
+	if (self.accessToken.length == 0 || self.authKind != IMSessionAuthKindAPIKey) {
+		return nil;
+	}
+	return self.accessToken;
 }
 
 #pragma mark - Keychain
@@ -108,7 +155,10 @@ static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 	NSMutableDictionary *query = [self keychainQuery];
 	query[(__bridge id)kSecValueData] = [token dataUsingEncoding:NSUTF8StringEncoding];
 	query[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
-	SecItemAdd((__bridge CFDictionaryRef)query, NULL);
+	OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
+	if (status != errSecSuccess) {
+		NSLog(@"IMSession: SecItemAdd failed (%d) — token not persisted, session is in-memory only", (int)status);
+	}
 }
 
 - (void)deleteKeychainToken {

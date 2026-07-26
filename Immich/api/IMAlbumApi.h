@@ -4,6 +4,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@interface IMAlbumAssetsTask : NSObject
+- (void)cancel;
+@end
+
 @interface IMAlbumApi : NSObject
 
 + (void)allAlbumsWithCompletion:(void (^)(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error))completion;
@@ -19,6 +23,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (void)deleteAlbumId:(NSString *)albumId completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 
++ (IMAlbumAssetsTask *)assetsInAlbumId:(NSString *)albumId
+                                  order:(nullable NSString *)order
+                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion;
+
 + (nullable NSURLSessionTask *)assetsInAlbumId:(NSString *)albumId
                                     completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion;
 
@@ -26,9 +34,15 @@ NS_ASSUME_NONNULL_BEGIN
           toAlbumId:(NSString *)albumId
          completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 
++ (void)addAssetIds:(NSArray<NSString *> *)assetIds
+          toAlbumId:(NSString *)albumId
+ detailedCompletion:(void (^)(NSInteger added, NSInteger duplicates, NSInteger failed, NSError *_Nullable error))completion;
+
 + (void)removeAssetIds:(NSArray<NSString *> *)assetIds
           fromAlbumId:(NSString *)albumId
            completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
+
++ (void)adjustCachedAssetCountForAlbumId:(NSString *)albumId delta:(NSInteger)delta;
 
 @end
 

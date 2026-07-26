@@ -50,4 +50,9 @@ static IMServerStorage *sCachedServerStorage;
 	return sCachedServerStorage;
 }
 
++ (void)clearCached {
+	sCachedServerVersion = nil;
+	sCachedServerStorage = nil;
+}
+
 @end

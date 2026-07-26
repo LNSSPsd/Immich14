@@ -25,11 +25,15 @@ typedef NS_ENUM(NSInteger, IMSyncState) {
 
 - (NSArray<IMAsset *> *)cachedAssetsForTimeBucket:(NSString *)timeBucket;
 
+- (void)clearAllData;
+
 #pragma mark - Sync state (Phase 7)
 
 - (void)setSyncState:(IMSyncState)state
               assetId:(nullable NSString *)assetId
     forDeviceAssetId:(NSString *)deviceAssetId;
+
+- (void)resetUploadingStates;
 
 - (IMSyncState)syncStateForDeviceAssetId:(NSString *)deviceAssetId;
 

@@ -1,4 +1,5 @@
 #import "IMAsset.h"
+#import "common.h"
 
 static id IMValueOrNil(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
@@ -38,7 +39,7 @@ static id IMValueOrNil(id value) {
 		asset.favorite = (i < isFavorite.count) ? [isFavorite[i] boolValue] : NO;
 		asset.image = (i < isImage.count) ? [isImage[i] boolValue] : YES;
 		id durationValue = (i < duration.count) ? duration[i] : nil;
-		asset.durationMs = [durationValue isKindOfClass:[NSNumber class]] ? [durationValue integerValue] : 0;
+		asset.durationMs = IMDurationMsFromJSONValue(durationValue);
 		asset.ratio = (i < ratio.count) ? [ratio[i] doubleValue] : 1.0;
 		id cityValue = (i < city.count) ? IMValueOrNil(city[i]) : nil;
 		asset.city = [cityValue isKindOfClass:[NSString class]] ? cityValue : nil;
@@ -65,10 +66,14 @@ static id IMValueOrNil(id value) {
 	id favorite = IMValueOrNil(dict[@"isFavorite"]);
 	asset.favorite = [favorite isKindOfClass:[NSNumber class]] && [favorite boolValue];
 	asset.image = ![IMValueOrNil(dict[@"type"]) isEqual:@"VIDEO"];
-	id duration = IMValueOrNil(dict[@"duration"]);
-	asset.durationMs = [duration isKindOfClass:[NSNumber class]] ? [duration integerValue] : 0;
+	asset.durationMs = IMDurationMsFromJSONValue(IMValueOrNil(dict[@"duration"]));
 	id widthValue = IMValueOrNil(dict[@"width"]);
 	id heightValue = IMValueOrNil(dict[@"height"]);
+	NSDictionary *exif = IMValueOrNil(dict[@"exifInfo"]);
+	if (![widthValue isKindOfClass:[NSNumber class]] && [exif isKindOfClass:[NSDictionary class]]) {
+		widthValue = IMValueOrNil(exif[@"exifImageWidth"]);
+		heightValue = IMValueOrNil(exif[@"exifImageHeight"]);
+	}
 	double width = [widthValue isKindOfClass:[NSNumber class]] ? [widthValue doubleValue] : 0;
 	double height = [heightValue isKindOfClass:[NSNumber class]] ? [heightValue doubleValue] : 0;
 	asset.ratio = height > 0 ? width / height : 1.0;

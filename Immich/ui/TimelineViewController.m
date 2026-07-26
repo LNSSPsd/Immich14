@@ -3,6 +3,7 @@
 #import "IMClusterCell.h"
 #import "IMTimelineGridLayout.h"
 #import "IMAssetApi.h"
+#import "IMSyncStreamApi.h"
 #import "AssetViewController.h"
 #import "IMBulkAssetActions.h"
 #import "IMDatabase.h"
@@ -49,6 +50,7 @@ static const CGFloat kFooterHeight = 56;
 @property (nonatomic, strong) dispatch_queue_t localScanQueue;
 @property (nonatomic) BOOL localRefreshPending;
 @property (nonatomic) BOOL hasScrolledToNewest; 
+@property (nonatomic) BOOL pendingInitialScroll; 
 @property (nonatomic, strong) UILabel *footerLabel;
 @property (nonatomic) NSInteger statsImageCount;
 @property (nonatomic) NSInteger statsVideoCount;
@@ -194,10 +196,57 @@ static const CGFloat kCellSpacing = 2;
 	                                          selector:@selector(scheduleLocalRefresh)
 	                                              name:IMSyncStateDidChangeNotification
 	                                            object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+	                                          selector:@selector(serverAssetsDidChange:)
+	                                              name:IMServerAssetsDidChangeNotification
+	                                            object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+	                                          selector:@selector(pollServerChanges)
+	                                              name:UIApplicationDidBecomeActiveNotification
+	                                            object:nil];
 
 	[self loadCachedBuckets];
 	[self refreshBuckets];
 	[self refreshLocalPendingAssets];
+	[self refreshAssetStatistics];
+	[self pollServerChanges];
+}
+
+#pragma mark - Server-side change detection (delta sync)
+
+- (void)pollServerChanges {
+	__weak typeof(self) weakSelf = self;
+	[[IMSyncStreamApi shared] pollAssetChangesWithCompletion:^(NSSet<NSString *> *_Nullable changedBuckets,
+	                                                            BOOL sawDeletes, NSError *_Nullable error) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || error) {
+			return;
+		}
+		if (changedBuckets.count == 0 && !sawDeletes) {
+			return;
+		}
+		if (sawDeletes) {
+			[strongSelf.bucketAssets removeAllObjects];
+		} else {
+			for (NSString *bucket in changedBuckets) {
+				[strongSelf.bucketAssets removeObjectForKey:bucket];
+			}
+		}
+		[strongSelf refreshBuckets];
+		[strongSelf refreshAssetStatistics];
+	}];
+}
+
+- (void)serverAssetsDidChange:(NSNotification *)note {
+	NSArray<NSString *> *buckets = note.userInfo[IMChangedTimeBucketsUserInfoKey];
+	if (buckets.count > 0) {
+		for (NSString *bucket in buckets) {
+			[self.bucketAssets removeObjectForKey:bucket];
+		}
+	} else {
+		[self.bucketAssets removeAllObjects];
+	}
+	[self refreshBuckets];
 	[self refreshAssetStatistics];
 }
 
@@ -218,6 +267,10 @@ static const CGFloat kCellSpacing = 2;
 	self.titleScrimLayer.frame = self.titleScrimView.bounds;
 	[CATransaction commit];
 	[self updateFooterLabel];
+	if (self.pendingInitialScroll && self.view.window) {
+		self.pendingInitialScroll = NO;
+		[self scrollToNewestAnimated:NO];
+	}
 }
 
 #pragma mark - Local (PhotoKit) pending assets
@@ -344,9 +397,17 @@ static const CGFloat kCellSpacing = 2;
 
 - (void)favoriteSelected {
 	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
-	[IMBulkAssetActions favoriteAssets:assets
-	              presentingController:self
-	                         completion:^(BOOL success) {
+	BOOL allFavorite = assets.count > 0;
+	for (IMAsset *asset in assets) {
+		if (!asset.isFavorite) {
+			allFavorite = NO;
+			break;
+		}
+	}
+	[IMBulkAssetActions setFavorite:!allFavorite
+	                          assets:assets
+	           presentingController:self
+	                      completion:^(BOOL success) {
 		    [self toggleSelecting];
 	    }];
 }
@@ -393,6 +454,9 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)pullToRefresh {
+	if (self.selecting) {
+		[self toggleSelecting];
+	}
 	[self.bucketAssets removeAllObjects];
 	[self refreshBuckets];
 	[self refreshLocalPendingAssets];
@@ -430,7 +494,11 @@ static const CGFloat kCellSpacing = 2;
 	[self updateEmptyState];
 	if (!self.hasScrolledToNewest && self.bucketDates.count > 0) {
 		self.hasScrolledToNewest = YES;
-		[self scrollToNewestAnimated:NO];
+		if (self.view.window) {
+			[self scrollToNewestAnimated:NO];
+		} else {
+			self.pendingInitialScroll = YES;
+		}
 	}
 	[self updateFooterLabel];
 	__weak typeof(self) weakSelf = self;
@@ -472,9 +540,18 @@ static const CGFloat kCellSpacing = 2;
 			formatter = [[NSNumberFormatter alloc] init];
 			formatter.numberStyle = NSNumberFormatterDecimalStyle;
 		});
-		self.footerLabel.text = [NSString stringWithFormat:_(@"%@ Photos, %@ Videos"),
-		                                                    [formatter stringFromNumber:@(self.statsImageCount)],
-		                                                    [formatter stringFromNumber:@(self.statsVideoCount)]];
+		NSString *text = [NSString stringWithFormat:_(@"%@ Photos, %@ Videos"),
+		                                             [formatter stringFromNumber:@(self.statsImageCount)],
+		                                             [formatter stringFromNumber:@(self.statsVideoCount)]];
+		NSInteger localPending = 0;
+		for (NSArray<IMTimelineLocalItem *> *items in self.localItemsByBucket.allValues) {
+			localPending += (NSInteger)items.count;
+		}
+		if (localPending > 0) {
+			text = [text stringByAppendingFormat:_(@" · %@ not uploaded"),
+			                                      [formatter stringFromNumber:@(localPending)]];
+		}
+		self.footerLabel.text = text;
 	} else {
 		self.footerLabel.text = @"";
 	}
@@ -706,6 +783,9 @@ static const CGFloat kCellSpacing = 2;
 #pragma mark - Pinch-to-zoom (Phase 9)
 
 - (void)handlePinch:(UIPinchGestureRecognizer *)gesture {
+	if (self.selecting) {
+		return;
+	}
 	switch (gesture.state) {
 		case UIGestureRecognizerStateBegan:
 			[self endZoomSettle];
@@ -717,10 +797,11 @@ static const CGFloat kCellSpacing = 2;
 		case UIGestureRecognizerStateChanged: {
 			if (self.clusterMode) {
 				if (gesture.scale >= kClusterExitPinchScale) {
+					NSString *keepBucket = [self topmostVisibleBucket];
 					self.clusterMode = NO;
 					self.columnStepIndex = kColumnStepCount - 1;
 					[self applyColumnStepIndex:self.columnStepIndex];
-					[self animateModeTransitionZoomingOut:NO thenScrollToBucket:nil];
+					[self animateModeTransitionZoomingOut:NO thenScrollToBucket:keepBucket];
 				}
 				return;
 			}
@@ -728,8 +809,9 @@ static const CGFloat kCellSpacing = 2;
 			CGFloat maxColumns = kColumnSteps[kColumnStepCount - 1];
 			CGFloat rawColumns = self.pinchStartColumns / gesture.scale;
 			if (rawColumns > maxColumns * kClusterEnterOvershoot) {
+				NSString *keepBucket = [self topmostVisibleBucket];
 				self.clusterMode = YES;
-				[self animateModeTransitionZoomingOut:YES thenScrollToBucket:nil];
+				[self animateModeTransitionZoomingOut:YES thenScrollToBucket:keepBucket];
 				return;
 			}
 			self.pinchColumns = MAX(minColumns, MIN(rawColumns, maxColumns));
@@ -899,6 +981,15 @@ static const CGFloat kCellSpacing = 2;
 	[self updateFooterLabel]; 
 }
 
+- (nullable NSString *)topmostVisibleBucket {
+	NSArray<NSIndexPath *> *visible = [self sortedVisibleIndexPaths];
+	if (visible.count == 0) {
+		return nil;
+	}
+	NSInteger index = self.clusterMode ? visible.firstObject.item : visible.firstObject.section;
+	return (index >= 0 && index < (NSInteger)self.bucketDates.count) ? self.bucketDates[index] : nil;
+}
+
 - (void)exitClusterModeAndJumpToBucketIndex:(NSInteger)bucketIndex {
 	NSString *bucket = (bucketIndex >= 0 && bucketIndex < (NSInteger)self.bucketDates.count) ? self.bucketDates[bucketIndex] : nil;
 	self.clusterMode = NO;
@@ -909,6 +1000,7 @@ static const CGFloat kCellSpacing = 2;
 
 - (void)animateModeTransitionZoomingOut:(BOOL)zoomingOut thenScrollToBucket:(nullable NSString *)bucket {
 	self.selectButton.enabled = !self.clusterMode;
+	self.zoomAnchorIndexPath = nil;
 
 	UIView *snapshot = [self.collectionView snapshotViewAfterScreenUpdates:NO];
 	snapshot.frame = self.collectionView.frame;
@@ -929,6 +1021,22 @@ static const CGFloat kCellSpacing = 2;
 	[self.collectionView.collectionViewLayout invalidateLayout];
 	[self.collectionView reloadData];
 
+	if (bucket) {
+		NSUInteger section = [self.bucketDates indexOfObject:bucket];
+		if (section != NSNotFound) {
+			[self.collectionView layoutIfNeeded];
+			NSIndexPath *target = self.clusterMode
+			    ? [NSIndexPath indexPathForItem:(NSInteger)section inSection:0]
+			    : [NSIndexPath indexPathForItem:0 inSection:(NSInteger)section];
+			if (target.section < self.collectionView.numberOfSections &&
+			    target.item < [self.collectionView numberOfItemsInSection:target.section]) {
+				[self.collectionView scrollToItemAtIndexPath:target
+				                            atScrollPosition:UICollectionViewScrollPositionTop
+				                                    animated:NO];
+			}
+		}
+	}
+
 	__weak typeof(self) weakSelf = self;
 	[UIView animateWithDuration:0.3
 	                       delay:0
@@ -941,19 +1049,7 @@ static const CGFloat kCellSpacing = 2;
 	    }
 	                  completion:^(BOOL finished) {
 		    [snapshot removeFromSuperview];
-		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf) {
-			    return;
-		    }
-		    if (bucket) {
-			    NSUInteger section = [strongSelf.bucketDates indexOfObject:bucket];
-			    if (section != NSNotFound && (NSInteger)section < strongSelf.collectionView.numberOfSections) {
-				    [strongSelf.collectionView scrollToItemAtIndexPath:[NSIndexPath indexPathForItem:0 inSection:section]
-				                                        atScrollPosition:UICollectionViewScrollPositionTop
-				                                                animated:YES];
-			    }
-		    }
-		    [strongSelf updateTitleBarForScrollPosition];
+		    [weakSelf updateTitleBarForScrollPosition];
 	    }];
 }
 
@@ -1098,7 +1194,12 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (nullable NSDate *)majorityDateAmongVisible:(NSArray<NSIndexPath *> *)sortedVisible {
-	NSCalendar *calendar = [NSCalendar currentCalendar];
+	static NSCalendar *calendar;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+		calendar.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+	});
 	NSMutableDictionary<NSDate *, NSNumber *> *countsByDay = [NSMutableDictionary dictionary];
 	NSDate *bestDay = nil;
 	NSInteger bestCount = 0;
@@ -1172,11 +1273,15 @@ static const CGFloat kCellSpacing = 2;
 	static NSCalendar *calendar;
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
+		NSTimeZone *gmt = [NSTimeZone timeZoneForSecondsFromGMT:0];
 		monthDayFormatter = [[NSDateFormatter alloc] init];
 		monthDayFormatter.dateFormat = @"MMM d";
+		monthDayFormatter.timeZone = gmt;
 		monthFormatter = [[NSDateFormatter alloc] init];
 		monthFormatter.dateFormat = @"MMM";
-		calendar = [NSCalendar currentCalendar];
+		monthFormatter.timeZone = gmt;
+		calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+		calendar.timeZone = gmt;
 	});
 
 	NSInteger fromYear = [calendar component:NSCalendarUnitYear fromDate:from];
@@ -1301,9 +1406,9 @@ static const CGFloat kCellSpacing = 2;
 	UIFont *font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
 	NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:combined];
 	[text addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, combined.length)];
-	[text addAttribute:NSForegroundColorAttributeName value:UIColor.labelColor range:NSMakeRange(0, month.length)];
+	[text addAttribute:NSForegroundColorAttributeName value:UIColor.blackColor range:NSMakeRange(0, month.length)];
 	[text addAttribute:NSForegroundColorAttributeName
-	             value:[UIColor.labelColor colorWithAlphaComponent:0.5]
+	             value:[UIColor.blackColor colorWithAlphaComponent:0.5]
 	             range:NSMakeRange(month.length, combined.length - month.length)];
 	return text;
 }
@@ -1320,7 +1425,7 @@ static const CGFloat kCellSpacing = 2;
 	NSString *year = date ? [yearFormatter stringFromDate:date] : @"";
 	return [[NSAttributedString alloc] initWithString:year
 	                                        attributes:@{
-		                                        NSForegroundColorAttributeName : UIColor.labelColor,
+		                                        NSForegroundColorAttributeName : UIColor.blackColor,
 		                                        NSFontAttributeName : [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
 	                                        }];
 }

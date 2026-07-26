@@ -13,6 +13,7 @@
 @property (nonatomic, strong) UIActivityIndicatorView *activityIndicator;
 @property (nonatomic, copy) NSArray<IMAsset *> *assets;
 @property (nonatomic, strong) UIBarButtonItem *moreButton;
+@property (nonatomic, strong, nullable) IMAlbumAssetsTask *fetchTask;
 
 @property (nonatomic) BOOL selecting;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, IMAsset *> *selectedAssets;
@@ -20,6 +21,7 @@
 @property (nonatomic, strong) UIBarButtonItem *addAlbumButton;
 @property (nonatomic, strong) UIBarButtonItem *downloadButton;
 @property (nonatomic, strong) UIBarButtonItem *removeButton;
+@property (nonatomic, strong) UIBarButtonItem *deleteButton;
 @end
 
 @implementation AlbumDetailViewController
@@ -118,15 +120,33 @@ static const CGFloat kCellSpacing = 2;
 	[self reload];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	if ([self isMovingFromParentViewController]) {
+		if (self.selecting) {
+			[self toggleSelecting];
+		}
+		[self.fetchTask cancel];
+		self.fetchTask = nil;
+	}
+}
+
+- (void)dealloc {
+	[_fetchTask cancel];
+}
+
 - (void)reload {
 	[self.activityIndicator startAnimating];
+	[self.fetchTask cancel];
 	__weak typeof(self) weakSelf = self;
-	[IMAlbumApi assetsInAlbumId:self.album.albumId
-	                  completion:^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
+	self.fetchTask = [IMAlbumApi assetsInAlbumId:self.album.albumId
+	                                        order:self.album.order
+	                                   completion:^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
 		    if (!strongSelf) {
 			    return;
 		    }
+		    strongSelf.fetchTask = nil;
 		    [strongSelf.activityIndicator stopAnimating];
 		    [strongSelf.refreshControl endRefreshing];
 		    if (error || !assets) {
@@ -138,7 +158,11 @@ static const CGFloat kCellSpacing = 2;
 		    }
 		    strongSelf.emptyLabel.text = _(@"No photos in this album yet.");
 		    strongSelf.assets = assets;
-		    [strongSelf.collectionView reloadData];
+		    if (strongSelf.selecting) {
+			    [strongSelf toggleSelecting];
+		    } else {
+			    [strongSelf.collectionView reloadData];
+		    }
 		    strongSelf.emptyLabel.hidden = assets.count > 0;
 	    }];
 }
@@ -192,7 +216,13 @@ static const CGFloat kCellSpacing = 2;
 		                          name:name
 		                    completion:^(IMAlbum *_Nullable album, NSError *_Nullable error) {
 			        typeof(self) strongSelf = weakSelf;
-			        if (!strongSelf || error || !album) {
+			        if (!strongSelf) {
+				        return;
+			        }
+			        if (error || !album) {
+				        [IMBulkAssetActions showErrorAlertWithTitle:_(@"Couldn't Rename Album")
+				                                              message:error.localizedDescription
+				                                presentingController:strongSelf];
 				        return;
 			        }
 			        strongSelf.album = album;
@@ -214,9 +244,16 @@ static const CGFloat kCellSpacing = 2;
 		    [IMAlbumApi deleteAlbumId:weakSelf.album.albumId
 		                    completion:^(BOOL success, NSError *_Nullable error) {
 			        typeof(self) strongSelf = weakSelf;
-			        if (strongSelf && success) {
-				        [strongSelf.navigationController popViewControllerAnimated:YES];
+			        if (!strongSelf) {
+				        return;
 			        }
+			        if (!success) {
+				        [IMBulkAssetActions showErrorAlertWithTitle:_(@"Couldn't Delete Album")
+				                                              message:error.localizedDescription
+				                                presentingController:strongSelf];
+				        return;
+			        }
+			        [strongSelf.navigationController popViewControllerAnimated:YES];
 		        }];
 	    }]];
 	[self presentViewController:alert animated:YES completion:nil];
@@ -246,24 +283,40 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (NSArray<UIBarButtonItem *> *)makeSelectionToolbarItems {
-	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *removeImage = nil;
+	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *removeImage = nil, *trashImage = nil;
 	if (@available(iOS 13.0, *)) {
 		starImage = [UIImage systemImageNamed:@"star"];
 		albumImage = [UIImage systemImageNamed:@"plus.rectangle.on.folder"];
 		downloadImage = [UIImage systemImageNamed:@"square.and.arrow.down"];
 		removeImage = [UIImage systemImageNamed:@"minus.circle"];
+		trashImage = [UIImage systemImageNamed:@"trash"];
 	}
 	self.favoriteButton = [[UIBarButtonItem alloc] initWithImage:starImage style:UIBarButtonItemStylePlain target:self action:@selector(favoriteSelected)];
 	self.addAlbumButton = [[UIBarButtonItem alloc] initWithImage:albumImage style:UIBarButtonItemStylePlain target:self action:@selector(addSelectedToAlbum)];
 	self.downloadButton = [[UIBarButtonItem alloc] initWithImage:downloadImage style:UIBarButtonItemStylePlain target:self action:@selector(downloadSelected)];
 	self.removeButton = [[UIBarButtonItem alloc] initWithImage:removeImage style:UIBarButtonItemStylePlain target:self action:@selector(removeSelectedFromAlbum)];
+	self.deleteButton = [[UIBarButtonItem alloc] initWithImage:trashImage style:UIBarButtonItemStylePlain target:self action:@selector(deleteSelected)];
 	if (@available(iOS 13.0, *)) {
 		self.removeButton.tintColor = UIColor.systemRedColor;
+		self.deleteButton.tintColor = UIColor.systemRedColor;
 	}
 	UIBarButtonItem *flex1 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex2 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex3 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.removeButton ];
+	UIBarButtonItem *flex4 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.removeButton, flex4, self.deleteButton ];
+}
+
+- (BOOL)allSelectedAreFavorite {
+	if (self.selectedAssets.count == 0) {
+		return NO;
+	}
+	for (IMAsset *asset in self.selectedAssets.allValues) {
+		if (!asset.isFavorite) {
+			return NO;
+		}
+	}
+	return YES;
 }
 
 - (void)updateSelectionToolbarState {
@@ -272,6 +325,10 @@ static const CGFloat kCellSpacing = 2;
 	self.addAlbumButton.enabled = hasSelection;
 	self.downloadButton.enabled = hasSelection;
 	self.removeButton.enabled = hasSelection;
+	self.deleteButton.enabled = hasSelection;
+	if (@available(iOS 13.0, *)) {
+		self.favoriteButton.image = [UIImage systemImageNamed:[self allSelectedAreFavorite] ? @"star.slash" : @"star"];
+	}
 	if (self.selecting) {
 		self.title = hasSelection ? [NSString stringWithFormat:_(@"%ld Selected"), (long)self.selectedAssets.count] : _(@"Select Items");
 	} else {
@@ -281,20 +338,70 @@ static const CGFloat kCellSpacing = 2;
 
 - (void)favoriteSelected {
 	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
-	[IMBulkAssetActions favoriteAssets:assets
-	              presentingController:self
-	                         completion:^(BOOL success) {
-		    [self toggleSelecting];
+	BOOL favorite = ![self allSelectedAreFavorite];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions setFavorite:favorite
+	                         assets:assets
+	           presentingController:self
+	                     completion:^(BOOL success) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (strongSelf.selecting) {
+			    [strongSelf toggleSelecting];
+		    }
+		    if (success) {
+			    [strongSelf reload];
+		    }
 	    }];
 }
 
 - (void)downloadSelected {
 	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	__weak typeof(self) weakSelf = self;
 	[IMBulkAssetActions downloadAssets:assets
 	              presentingController:self
 	                         completion:^{
-		    [self toggleSelecting];
+		    typeof(self) strongSelf = weakSelf;
+		    if (strongSelf.selecting) {
+			    [strongSelf toggleSelecting];
+		    }
 	    }];
+}
+
+- (void)deleteSelected {
+	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions confirmDeleteAssets:assets
+	                   presentingController:self
+	                              completion:^(BOOL deleted) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || !deleted) {
+			    return;
+		    }
+		    [strongSelf removeAssetsLocally:assets];
+		    if (strongSelf.selecting) {
+			    [strongSelf toggleSelecting];
+		    }
+	    }];
+}
+
+- (void)removeAssetsLocally:(NSArray<IMAsset *> *)assets {
+	NSMutableSet<NSString *> *removedIds = [NSMutableSet setWithCapacity:assets.count];
+	for (IMAsset *asset in assets) {
+		[removedIds addObject:asset.assetId];
+	}
+	NSMutableArray<IMAsset *> *remaining = [NSMutableArray arrayWithCapacity:self.assets.count];
+	NSInteger removed = 0;
+	for (IMAsset *asset in self.assets) {
+		if ([removedIds containsObject:asset.assetId]) {
+			removed++;
+		} else {
+			[remaining addObject:asset];
+		}
+	}
+	self.assets = remaining;
+	[self.collectionView reloadData];
+	self.emptyLabel.hidden = remaining.count > 0;
+	[IMAlbumApi adjustCachedAssetCountForAlbumId:self.album.albumId delta:-removed];
 }
 
 - (void)addSelectedToAlbum {
@@ -321,14 +428,19 @@ static const CGFloat kCellSpacing = 2;
 		                  fromAlbumId:weakSelf.album.albumId
 		                   completion:^(BOOL success, NSError *_Nullable error) {
 			        typeof(self) strongSelf = weakSelf;
-			        if (!strongSelf || !success) {
+			        if (!strongSelf) {
 				        return;
 			        }
-			        NSMutableArray<IMAsset *> *remaining = [strongSelf.assets mutableCopy];
-			        [remaining removeObjectsInArray:assets];
-			        strongSelf.assets = remaining;
-			        [strongSelf toggleSelecting];
-			        strongSelf.emptyLabel.hidden = remaining.count > 0;
+			        if (!success) {
+				        [IMBulkAssetActions showErrorAlertWithTitle:_(@"Couldn't Remove")
+				                                              message:error.localizedDescription
+				                                presentingController:strongSelf];
+				        return;
+			        }
+			        [strongSelf removeAssetsLocally:assets];
+			        if (strongSelf.selecting) {
+				        [strongSelf toggleSelecting];
+			        }
 		        }];
 	    }]];
 	[self presentViewController:alert animated:YES completion:nil];
@@ -369,14 +481,16 @@ static const CGFloat kCellSpacing = 2;
 	              fromAlbumId:self.album.albumId
 	               completion:^(BOOL success, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf || !success) {
+		    if (!strongSelf) {
 			    return;
 		    }
-		    NSMutableArray<IMAsset *> *remaining = [strongSelf.assets mutableCopy];
-		    [remaining removeObject:asset];
-		    strongSelf.assets = remaining;
-		    [strongSelf.collectionView reloadData];
-		    strongSelf.emptyLabel.hidden = remaining.count > 0;
+		    if (!success) {
+			    [IMBulkAssetActions showErrorAlertWithTitle:_(@"Couldn't Remove")
+			                                          message:error.localizedDescription
+			                            presentingController:strongSelf];
+			    return;
+		    }
+		    [strongSelf removeAssetsLocally:@[ asset ]];
 	    }];
 }
 

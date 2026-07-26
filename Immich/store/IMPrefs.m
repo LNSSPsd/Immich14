@@ -26,7 +26,10 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 	self = [super init];
 	if (self) {
 		_queue = dispatch_queue_create(IM_PREFS_QUEUE, DISPATCH_QUEUE_SERIAL);
-		NSDictionary *std = [NSUserDefaults standardUserDefaults].dictionaryRepresentation;
+		NSString *bundleId = [NSBundle mainBundle].bundleIdentifier;
+		NSDictionary *std = bundleId
+		    ? [[NSUserDefaults standardUserDefaults] persistentDomainForName:bundleId]
+		    : nil;
 		_backing = [NSMutableDictionary dictionaryWithDictionary:std ?: @{}];
 
 		NSDictionary<NSString *, id> *defaultValues = @{
@@ -61,13 +64,13 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 		} else {
 			[self.backing removeObjectForKey:key];
 		}
+		NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+		if (value) {
+			[defaults setObject:value forKey:key];
+		} else {
+			[defaults removeObjectForKey:key];
+		}
 	});
-	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-	if (value) {
-		[defaults setObject:value forKey:key];
-	} else {
-		[defaults removeObjectForKey:key];
-	}
 }
 
 - (BOOL)boolForKey:(NSString *)key {

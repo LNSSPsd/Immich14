@@ -77,12 +77,70 @@ static NSString *const kAlbumCellId = @"album";
 
 #pragma mark - Adding
 
-- (void)addToAlbumId:(NSString *)albumId {
+- (void)addToAlbum:(IMAlbum *)album {
+	self.tableView.userInteractionEnabled = NO;
+	self.navigationItem.leftBarButtonItem.enabled = NO;
+	[self.spinner startAnimating];
+	NSString *albumName = album.name;
+	__weak typeof(self) weakSelf = self;
 	[IMAlbumApi addAssetIds:self.assetIds
-	              toAlbumId:albumId
-	             completion:^(BOOL success, NSError *_Nullable error) {
+	              toAlbumId:album.albumId
+	     detailedCompletion:^(NSInteger added, NSInteger duplicates, NSInteger failed, NSError *_Nullable error) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf) {
+			    return;
+		    }
+		    [strongSelf.spinner stopAnimating];
+		    UIViewController *presenter = strongSelf.presentingViewController;
+		    [strongSelf dismissViewControllerAnimated:YES completion:^{
+			    [AddToAlbumViewController showAddResultWithAdded:added
+			                                          duplicates:duplicates
+			                                              failed:failed
+			                                               error:error
+			                                           albumName:albumName
+			                                                  on:presenter];
+		    }];
 	    }];
-	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
++ (void)showAddResultWithAdded:(NSInteger)added
+                    duplicates:(NSInteger)duplicates
+                        failed:(NSInteger)failed
+                         error:(nullable NSError *)error
+                     albumName:(NSString *)albumName
+                            on:(nullable UIViewController *)presenter {
+	if (!presenter) {
+		return;
+	}
+	if (error || (added == 0 && duplicates == 0)) {
+		NSString *message = error.localizedDescription ?: _(@"The server rejected these items.");
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Couldn't Add to Album")
+		                                                                 message:message
+		                                                          preferredStyle:UIAlertControllerStyleAlert];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		[presenter presentViewController:alert animated:YES completion:nil];
+		return;
+	}
+	NSString *title;
+	if (added > 0) {
+		title = [NSString stringWithFormat:_(@"Added %ld to \"%@\""), (long)added, albumName];
+	} else {
+		title = [NSString stringWithFormat:_(@"Already in \"%@\""), albumName];
+	}
+	NSMutableArray<NSString *> *notes = [NSMutableArray array];
+	if (added > 0 && duplicates > 0) {
+		[notes addObject:[NSString stringWithFormat:_(@"%ld already in the album."), (long)duplicates]];
+	}
+	if (failed > 0) {
+		[notes addObject:[NSString stringWithFormat:_(@"%ld couldn't be added."), (long)failed]];
+	}
+	UIAlertController *toast = [UIAlertController alertControllerWithTitle:title
+	                                                                 message:notes.count > 0 ? [notes componentsJoinedByString:@"\n"] : nil
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[presenter presentViewController:toast animated:YES completion:nil];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		[toast dismissViewControllerAnimated:YES completion:nil];
+	});
 }
 
 - (void)newAlbumTapped {
@@ -104,7 +162,7 @@ static NSString *const kAlbumCellId = @"album";
 		    [IMAlbumApi createAlbumWithName:name
 		                          completion:^(IMAlbum *_Nullable album, NSError *_Nullable error) {
 			        if (album) {
-				        [weakSelf addToAlbumId:album.albumId];
+				        [weakSelf addToAlbum:album];
 			        }
 		        }];
 	    }]];
@@ -149,7 +207,7 @@ static NSString *const kAlbumCellId = @"album";
 		[self newAlbumTapped];
 		return;
 	}
-	[self addToAlbumId:self.albums[indexPath.row].albumId];
+	[self addToAlbum:self.albums[indexPath.row]];
 }
 
 @end

@@ -10,9 +10,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-- (nullable IMThumbCacheTask *)thumbnailForAssetId:(NSString *)assetId
-                                                size:(NSString *)size
-                                          completion:(void (^)(UIImage *_Nullable image))completion;
+- (IMThumbCacheTask *)thumbnailForAssetId:(NSString *)assetId
+                                      size:(NSString *)size
+                                completion:(void (^)(UIImage *_Nullable image))completion;
 
 - (void)diskCacheSizeWithCompletion:(void (^)(unsigned long long bytes))completion;
 

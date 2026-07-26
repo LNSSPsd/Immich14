@@ -44,6 +44,13 @@ extern NSString *const IMAssetMediaSizePreview;
                                        filename:(NSString *)filename
                                   fileCreatedAt:(NSString *)fileCreatedAtISO8601
                                  fileModifiedAt:(NSString *)fileModifiedAtISO8601
+                               livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
+
++ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
+                                       filename:(NSString *)filename
+                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
+                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
                                      completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
 
 + (void)setFavorite:(BOOL)favorite

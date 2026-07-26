@@ -13,12 +13,21 @@ NS_ASSUME_NONNULL_BEGIN
   presentingController:(UIViewController *)presenter
              completion:(void (^)(BOOL success))completion;
 
++ (void)setFavorite:(BOOL)favorite
+             assets:(NSArray<IMAsset *> *)assets
+presentingController:(UIViewController *)presenter
+         completion:(void (^)(BOOL success))completion;
+
 + (void)downloadAssets:(NSArray<IMAsset *> *)assets
   presentingController:(UIViewController *)presenter
              completion:(void (^)(void))completion;
 
 + (void)presentAddToAlbumForAssets:(NSArray<IMAsset *> *)assets
               presentingController:(UIViewController *)presenter;
+
++ (void)showErrorAlertWithTitle:(NSString *)title
+                          message:(nullable NSString *)message
+            presentingController:(UIViewController *)presenter;
 
 @end
 

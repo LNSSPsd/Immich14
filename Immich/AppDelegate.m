@@ -20,8 +20,8 @@
 	         object:nil];
 
 	if ([IMSession shared].isLoggedIn) {
-		[IMAuthApi validateTokenWithCompletion:^(BOOL valid) {
-			if (!valid) {
+		[IMAuthApi validateSessionWithCompletion:^(BOOL valid, BOOL authRejected) {
+			if (!valid && authRejected) {
 				[[IMSession shared] logout]; 
 			}
 		}];

@@ -1,8 +1,10 @@
 #import "IMApiClient.h"
 #import "IMSession.h"
 #import "IMPrefs.h"
+#import "common.h"
 
 NSErrorDomain const IMApiErrorDomain = @"IMApiErrorDomain";
+NSString *const IMApiErrorStatusCodeKey = @"statusCode";
 
 typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	IMApiErrorInvalidURL = 1,
@@ -11,7 +13,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 };
 
 @interface IMApiClient () <NSURLSessionDelegate>
-@property (nonatomic, strong) NSURLSession *urlSession;
+@property (atomic, strong, nullable) NSURLSession *urlSession;
 @property (nonatomic, copy, nullable) NSURL *fixedBaseURL; 
 @property (nonatomic) BOOL usesSessionBaseURL;
 @end
@@ -28,14 +30,38 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return shared;
 }
 
++ (NSInteger)HTTPStatusForError:(nullable NSError *)error {
+	if (![error.domain isEqualToString:IMApiErrorDomain]) {
+		return 0;
+	}
+	id status = error.userInfo[IMApiErrorStatusCodeKey];
+	return [status respondsToSelector:@selector(integerValue)] ? [status integerValue] : 0;
+}
+
+- (NSURLSession *)makeURLSession {
+	NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+	config.timeoutIntervalForRequest = 30;
+	return [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
+}
+
 - (instancetype)initInternal {
 	self = [super init];
 	if (self) {
-		NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
-		config.timeoutIntervalForRequest = 30;
-		_urlSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
+		_urlSession = [self makeURLSession];
 	}
 	return self;
+}
+
+- (void)invalidate {
+	NSURLSession *session = self.urlSession;
+	self.urlSession = nil; 
+	[session finishTasksAndInvalidate];
+}
+
+- (void)resetConnections {
+	NSURLSession *old = self.urlSession;
+	self.urlSession = [self makeURLSession];
+	[old finishTasksAndInvalidate];
 }
 
 - (instancetype)initWithBaseURL:(NSURL *)baseURL {
@@ -87,9 +113,14 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	request.HTTPMethod = method;
 	[request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
-	NSString *auth = [IMSession shared].authorizationHeader;
-	if (auth) {
-		[request setValue:auth forHTTPHeaderField:@"Authorization"];
+	NSString *apiKey = self.overrideAPIKey ?: [IMSession shared].apiKeyHeaderValue;
+	if (apiKey) {
+		[request setValue:apiKey forHTTPHeaderField:@"x-api-key"];
+	} else {
+		NSString *auth = [IMSession shared].authorizationHeader;
+		if (auth) {
+			[request setValue:auth forHTTPHeaderField:@"Authorization"];
+		}
 	}
 	if (body) {
 		request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
@@ -101,7 +132,13 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 - (NSError *)invalidURLError {
 	return [NSError errorWithDomain:IMApiErrorDomain
 	                            code:IMApiErrorInvalidURL
-	                        userInfo:@{ NSLocalizedDescriptionKey: @"No server URL configured." }];
+	                        userInfo:@{ NSLocalizedDescriptionKey: _(@"No server URL configured.") }];
+}
+
+- (void)failJSON:(IMJSONHandler)completion withError:(NSError *)error {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		completion(nil, error);
+	});
 }
 
 #pragma mark - JSON requests
@@ -139,7 +176,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 		                                            code:IMApiErrorServer
 		                                        userInfo:@{
 			                                        NSLocalizedDescriptionKey: message,
-			                                        @"statusCode": @(status),
+			                                        IMApiErrorStatusCodeKey: @(status),
 		                                        }];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			completion(nil, serverError);
@@ -171,7 +208,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
                completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:query];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"GET" body:nil] completion:completion];
@@ -180,7 +217,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 - (NSURLSessionTask *)POST:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"POST" body:body] completion:completion];
@@ -189,7 +226,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 - (NSURLSessionTask *)PUT:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"PUT" body:body] completion:completion];
@@ -198,7 +235,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 - (NSURLSessionTask *)PATCH:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"PATCH" body:body] completion:completion];
@@ -207,7 +244,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 - (NSURLSessionTask *)DELETE:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"DELETE" body:body] completion:completion];
@@ -220,7 +257,10 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
                    completion:(IMDataHandler)completion {
 	NSURL *url = [self URLForPath:path query:query];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		NSError *urlError = [self invalidURLError];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(nil, urlError);
+		});
 		return nil;
 	}
 	NSURLRequest *request = [self requestWithURL:url method:@"GET" body:nil];
@@ -239,7 +279,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 			                                                code:IMApiErrorServer
 			                                            userInfo:@{
 				                                            NSLocalizedDescriptionKey: [NSHTTPURLResponse localizedStringForStatusCode:status],
-				                                            @"statusCode": @(status),
+				                                            IMApiErrorStatusCodeKey: @(status),
 			                                            }];
 			    dispatch_async(dispatch_get_main_queue(), ^{
 				    completion(nil, serverError);
@@ -256,6 +296,14 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 
 #pragma mark - Multipart
 
+static NSString *IMMultipartQuote(NSString *value) {
+	NSString *escaped = [value stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+	escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+	escaped = [escaped stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+	escaped = [escaped stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+	return escaped;
+}
+
 - (NSURLSessionTask *)multipartPOST:(NSString *)path
                              fields:(NSDictionary<NSString *, NSString *> *)fields
                           fileField:(NSString *)fileField
@@ -264,7 +312,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
                          completion:(IMJSONHandler)completion {
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
-		completion(nil, [self invalidURLError]);
+		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;
 	}
 
@@ -278,7 +326,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 
 	[fields enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
 		[body appendData:dashBoundary];
-		[body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", key]
+		[body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", IMMultipartQuote(key)]
 		              dataUsingEncoding:NSUTF8StringEncoding]];
 		[body appendData:[value dataUsingEncoding:NSUTF8StringEncoding]];
 		[body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
@@ -286,7 +334,7 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 
 	[body appendData:dashBoundary];
 	[body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"; filename=\"%@\"\r\n",
-	                                              fileField, filename] dataUsingEncoding:NSUTF8StringEncoding]];
+	                                              IMMultipartQuote(fileField), IMMultipartQuote(filename)] dataUsingEncoding:NSUTF8StringEncoding]];
 	[body appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
 	[body appendData:fileData];
 	[body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];

@@ -18,10 +18,14 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 }
 @end
 
+static const unsigned long long kDiskCacheCapBytes = 256 * 1024 * 1024;
+static const NSUInteger kWritesPerTrimCheck = 100;
+
 @interface IMThumbCache ()
 @property (nonatomic, strong) NSCache<NSString *, UIImage *> *memoryCache;
 @property (nonatomic, strong) dispatch_queue_t ioQueue;
 @property (nonatomic, copy) NSString *diskCacheDir;
+@property (atomic) NSUInteger writesSinceTrim;
 @end
 
 @implementation IMThumbCache
@@ -49,8 +53,44 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 		                           withIntermediateDirectories:YES
 		                                            attributes:nil
 		                                                 error:nil];
+		[self trimDiskCache];
 	}
 	return self;
+}
+
+- (void)trimDiskCache {
+	NSString *dir = self.diskCacheDir;
+	dispatch_barrier_async(self.ioQueue, ^{
+		NSFileManager *fm = [NSFileManager defaultManager];
+		NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+		unsigned long long total = 0;
+		for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+			NSString *path = [dir stringByAppendingPathComponent:name];
+			NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+			if (!attrs) {
+				continue;
+			}
+			total += attrs.fileSize;
+			[entries addObject:@{ @"path": path,
+			                      @"size": @(attrs.fileSize),
+			                      @"date": attrs.fileModificationDate ?: [NSDate distantPast] }];
+		}
+		if (total <= kDiskCacheCapBytes) {
+			return;
+		}
+		[entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+			return [a[@"date"] compare:b[@"date"]];
+		}];
+		unsigned long long target = kDiskCacheCapBytes * 8 / 10;
+		for (NSDictionary *entry in entries) {
+			if (total <= target) {
+				break;
+			}
+			if ([fm removeItemAtPath:entry[@"path"] error:nil]) {
+				total -= [entry[@"size"] unsignedLongLongValue];
+			}
+		}
+	});
 }
 
 - (NSString *)cacheKeyForAssetId:(NSString *)assetId size:(NSString *)size {
@@ -61,20 +101,22 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 	return [self.diskCacheDir stringByAppendingPathComponent:[key stringByAppendingPathExtension:@"jpg"]];
 }
 
-- (nullable IMThumbCacheTask *)thumbnailForAssetId:(NSString *)assetId
-                                                size:(NSString *)size
-                                          completion:(void (^)(UIImage *_Nullable image))completion {
+- (IMThumbCacheTask *)thumbnailForAssetId:(NSString *)assetId
+                                      size:(NSString *)size
+                                completion:(void (^)(UIImage *_Nullable image))completion {
 	NSString *key = [self cacheKeyForAssetId:assetId size:size];
+	IMThumbCacheTask *task = [[IMThumbCacheTask alloc] init];
 
 	UIImage *cached = [self.memoryCache objectForKey:key];
 	if (cached) {
 		dispatch_async(dispatch_get_main_queue(), ^{
-			completion(cached);
+			if (!task.cancelled) {
+				completion(cached);
+			}
 		});
-		return nil;
+		return task;
 	}
 
-	IMThumbCacheTask *task = [[IMThumbCacheTask alloc] init];
 	NSString *path = [self diskPathForKey:key];
 	__weak typeof(self) weakSelf = self;
 
@@ -87,6 +129,9 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 			UIImage *diskImage = [UIImage imageWithData:diskData];
 			if (diskImage) {
 				[weakSelf.memoryCache setObject:diskImage forKey:key cost:IMDecodedByteCost(diskImage)];
+				[[NSFileManager defaultManager] setAttributes:@{ NSFileModificationDate: [NSDate date] }
+				                                  ofItemAtPath:path
+				                                         error:nil];
 			}
 			if (!task.cancelled) {
 				dispatch_async(dispatch_get_main_queue(), ^{
@@ -118,6 +163,14 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 						    [weakSelf.memoryCache setObject:netImage forKey:key cost:IMDecodedByteCost(netImage)];
 					    }
 					    [data writeToFile:path atomically:YES];
+					    typeof(self) cache = weakSelf;
+					    if (cache) {
+						    cache.writesSinceTrim += 1;
+						    if (cache.writesSinceTrim >= kWritesPerTrimCheck) {
+							    cache.writesSinceTrim = 0;
+							    [cache trimDiskCache];
+						    }
+					    }
 					    if (!task.cancelled) {
 						    dispatch_async(dispatch_get_main_queue(), ^{
 							    if (!task.cancelled) {

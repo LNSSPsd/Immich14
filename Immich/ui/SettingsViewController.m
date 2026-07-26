@@ -1,4 +1,5 @@
 #import "SettingsViewController.h"
+#import "IMApiClient.h"
 #import "IMAuthApi.h"
 #import "IMUserApi.h"
 #import "IMServerApi.h"
@@ -83,7 +84,10 @@ static NSString *const kActionCellId = @"action";
 	self.user = [IMUserApi cachedUser];
 	self.serverVersion = [IMServerApi cachedServerVersion];
 	self.serverStorage = [IMServerApi cachedServerStorage];
+}
 
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
 	[self reload];
 }
 
@@ -194,6 +198,7 @@ static NSString *const kActionCellId = @"action";
 
 - (void)allowInsecureTLSSwitchChanged:(UISwitch *)sender {
 	IMPrefs.shared.allowInsecureTLS = sender.isOn;
+	[[IMApiClient shared] resetConnections];
 }
 
 #pragma mark - UITableViewDataSource

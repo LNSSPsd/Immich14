@@ -60,11 +60,18 @@
 + (void)favoriteAssets:(NSArray<IMAsset *> *)assets
   presentingController:(UIViewController *)presenter
              completion:(void (^)(BOOL success))completion {
-	[IMAssetApi setFavorite:YES
+	[self setFavorite:YES assets:assets presentingController:presenter completion:completion];
+}
+
++ (void)setFavorite:(BOOL)favorite
+             assets:(NSArray<IMAsset *> *)assets
+presentingController:(UIViewController *)presenter
+         completion:(void (^)(BOOL success))completion {
+	[IMAssetApi setFavorite:favorite
 	            forAssetIds:[self idsForAssets:assets]
 	             completion:^(BOOL success, NSError *_Nullable error) {
 		    if (!success) {
-			    [self showErrorAlertWithTitle:_(@"Couldn't Favorite")
+			    [self showErrorAlertWithTitle:favorite ? _(@"Couldn't Favorite") : _(@"Couldn't Unfavorite")
 			                            message:error.localizedDescription
 			              presentingController:presenter];
 		    }
@@ -92,10 +99,21 @@
 				    completion();
 				    return;
 			    }
+			    __block BOOL cancelled = NO;
+			    UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Downloading")
+			                                                                     message:@""
+			                                                              preferredStyle:UIAlertControllerStyleAlert];
+			    [alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel")
+			                                               style:UIAlertActionStyleCancel
+			                                             handler:^(UIAlertAction *_Nonnull action) {
+				    cancelled = YES;
+			    }]];
+			    [strongPresenter presentViewController:alert animated:YES completion:nil];
 			    [self downloadNext:assets
 			                 index:0
 			              failures:0
-			                 alert:nil
+			                 alert:alert
+			           isCancelled:^BOOL { return cancelled; }
 			  presentingController:strongPresenter
 			            completion:completion];
 		    });
@@ -105,9 +123,14 @@
 + (void)downloadNext:(NSArray<IMAsset *> *)assets
                index:(NSUInteger)index
             failures:(NSUInteger)failures
-               alert:(nullable UIAlertController *)alert
+               alert:(UIAlertController *)alert
+         isCancelled:(BOOL (^)(void))isCancelled
 presentingController:(UIViewController *)presenter
           completion:(void (^)(void))completion {
+	if (isCancelled()) {
+		completion();
+		return;
+	}
 	if (index >= assets.count) {
 		[alert dismissViewControllerAnimated:YES
 		                           completion:^{
@@ -121,23 +144,22 @@ presentingController:(UIViewController *)presenter
 		return;
 	}
 
-	NSString *progressMessage = [NSString stringWithFormat:_(@"Saving %ld of %ld…"), (long)(index + 1), (long)assets.count];
-	if (!alert) {
-		alert = [UIAlertController alertControllerWithTitle:_(@"Downloading") message:progressMessage preferredStyle:UIAlertControllerStyleAlert];
-		[presenter presentViewController:alert animated:YES completion:nil];
-	} else {
-		alert.message = progressMessage;
-	}
+	alert.message = [NSString stringWithFormat:_(@"Saving %ld of %ld…"), (long)(index + 1), (long)assets.count];
 
 	IMAsset *asset = assets[index];
 	UIAlertController *presentedAlert = alert;
 	[IMAssetApi originalDataForAssetId:asset.assetId
 	                        completion:^(NSData *_Nullable data, NSError *_Nullable error) {
+		    if (isCancelled()) {
+			    completion();
+			    return;
+		    }
 		    if (!data) {
 			    [self downloadNext:assets
 			                 index:index + 1
 			              failures:failures + 1
 			                 alert:presentedAlert
+			           isCancelled:isCancelled
 			  presentingController:presenter
 			            completion:completion];
 			    return;
@@ -153,6 +175,7 @@ presentingController:(UIViewController *)presenter
 					                 index:index + 1
 					              failures:failures + (success ? 0 : 1)
 					                 alert:presentedAlert
+					           isCancelled:isCancelled
 					  presentingController:presenter
 					            completion:completion];
 				    });

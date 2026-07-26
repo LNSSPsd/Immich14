@@ -8,6 +8,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)currentUserWithCompletion:(void (^)(IMUser *_Nullable user, NSError *_Nullable error))completion;
 + (nullable IMUser *)cachedUser;
 
++ (void)clearCachedUser;
+
 @end
 
 NS_ASSUME_NONNULL_END

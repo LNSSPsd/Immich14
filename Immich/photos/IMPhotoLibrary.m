@@ -148,6 +148,50 @@
 	return current ?: original ?: resources.firstObject;
 }
 
+- (void)pairedLivePhotoVideoForAsset:(PHAsset *)asset
+                           completion:(void (^)(NSData *_Nullable data,
+                                                 NSString *_Nullable filename,
+                                                 NSError *_Nullable error))completion {
+	if (!(asset.mediaSubtypes & PHAssetMediaSubtypePhotoLive)) {
+		completion(nil, nil, nil);
+		return;
+	}
+	NSArray<PHAssetResource *> *resources = [PHAssetResource assetResourcesForAsset:asset];
+	PHAssetResource *original = nil;
+	PHAssetResource *current = nil;
+	for (PHAssetResource *resource in resources) {
+		if (resource.type == PHAssetResourceTypePairedVideo) {
+			original = resource;
+		} else if (resource.type == PHAssetResourceTypeFullSizePairedVideo) {
+			current = resource;
+		}
+	}
+	PHAssetResource *resource = current ?: original;
+	if (!resource) {
+		completion(nil, nil, nil);
+		return;
+	}
+
+	NSMutableData *buffer = [NSMutableData data];
+	PHAssetResourceRequestOptions *options = [[PHAssetResourceRequestOptions alloc] init];
+	options.networkAccessAllowed = YES;
+	NSString *filename = resource.originalFilename;
+
+	[[PHAssetResourceManager defaultManager]
+	    requestDataForAssetResource:resource
+	                         options:options
+	            dataReceivedHandler:^(NSData *_Nonnull data) {
+		    [buffer appendData:data];
+	    }
+	               completionHandler:^(NSError *_Nullable error) {
+		    if (error) {
+			    completion(nil, nil, error);
+			    return;
+		    }
+		    completion(buffer, filename, nil);
+	    }];
+}
+
 - (void)originalDataForAsset:(PHAsset *)asset
                    completion:(void (^)(NSData *_Nullable data,
                                          NSString *_Nullable filename,

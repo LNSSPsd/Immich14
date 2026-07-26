@@ -74,6 +74,11 @@ typedef NS_ENUM(NSInteger, IMSearchScope) {
 @property (nonatomic, strong, nullable) NSTimer *debounceTimer;
 @property (nonatomic, strong, nullable) NSURLSessionTask *searchTask;
 @property (nonatomic) NSInteger searchGeneration;
+@property (nonatomic) NSInteger resultNextPage;
+@property (nonatomic) NSInteger peopleNextPage;
+@property (nonatomic) BOOL peopleLoading;
+@property (nonatomic, strong, nullable) NSURLSessionTask *browseTask;
+@property (nonatomic, copy, nullable) void (^browseRetryAction)(void);
 @end
 
 @implementation SearchViewController
@@ -206,12 +211,13 @@ static const CGFloat kScopeBarHeight = 44;
 
 - (void)loadBrowseData {
 	__weak typeof(self) weakSelf = self;
-	[IMSearchApi allPeopleWithCompletion:^(NSArray<IMPerson *> *_Nullable people, NSError *_Nullable error) {
+	[IMSearchApi peopleAtPage:1 completion:^(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf || error || !people) {
 			return;
 		}
 		strongSelf.people = people;
+		strongSelf.peopleNextPage = hasNextPage ? 2 : 0;
 		if (strongSelf.mode == IMSearchModeBrowse) {
 			[strongSelf.collectionView reloadData];
 		}
@@ -224,6 +230,30 @@ static const CGFloat kScopeBarHeight = 44;
 		}
 		strongSelf.placeAssets = assets;
 		strongSelf.placeCityNames = cityNames;
+		if (strongSelf.mode == IMSearchModeBrowse) {
+			[strongSelf.collectionView reloadData];
+		}
+	}];
+}
+
+- (void)loadMorePeople {
+	if (self.peopleLoading || self.peopleNextPage < 1) {
+		return;
+	}
+	self.peopleLoading = YES;
+	NSInteger page = self.peopleNextPage;
+	__weak typeof(self) weakSelf = self;
+	[IMSearchApi peopleAtPage:page completion:^(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf) {
+			return;
+		}
+		strongSelf.peopleLoading = NO;
+		if (error || !people) {
+			return;
+		}
+		strongSelf.people = [strongSelf.people arrayByAddingObjectsFromArray:people];
+		strongSelf.peopleNextPage = hasNextPage ? page + 1 : 0;
 		if (strongSelf.mode == IMSearchModeBrowse) {
 			[strongSelf.collectionView reloadData];
 		}
@@ -248,14 +278,23 @@ static const CGFloat kScopeBarHeight = 44;
 
 	[self setScopeBarVisible:YES];
 	__weak typeof(self) weakSelf = self;
-	self.debounceTimer = [NSTimer scheduledTimerWithTimeInterval:0.4
-	                                                       repeats:NO
-	                                                         block:^(NSTimer *_Nonnull timer) {
+	NSTimer *timer = [NSTimer timerWithTimeInterval:0.4
+	                                         repeats:NO
+	                                           block:^(NSTimer *_Nonnull unused) {
 		    [weakSelf performSearch:text];
 	    }];
+	[[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+	self.debounceTimer = timer;
 }
 
 - (void)retryLastSearch {
+	if (self.mode == IMSearchModeBrowse) {
+		if (self.browseRetryAction && !self.browseTask) {
+			self.emptyLabel.hidden = YES;
+			self.browseRetryAction();
+		}
+		return;
+	}
 	if (self.lastQuery.length > 0) {
 		[self performSearch:self.lastQuery];
 	}
@@ -275,6 +314,7 @@ static const CGFloat kScopeBarHeight = 44;
 }
 
 - (void)cancelInFlightSearch {
+	self.searchGeneration += 1;
 	[self.searchTask cancel];
 	self.searchTask = nil;
 	[self.activityIndicator stopAnimating];
@@ -282,48 +322,65 @@ static const CGFloat kScopeBarHeight = 44;
 
 - (void)performSearch:(NSString *)query {
 	[self cancelInFlightSearch];
+	[self.browseTask cancel];
+	self.browseTask = nil;
 	self.lastQuery = query;
 	self.mode = IMSearchModeResults;
 	self.resultAssets = @[];
+	self.resultNextPage = 0;
 	self.emptyLabel.hidden = YES;
 	[self.collectionView reloadData];
 	[self.activityIndicator startAnimating];
+	[self fetchSearchPage:1];
+}
 
-	self.searchGeneration += 1;
+- (void)fetchSearchPage:(NSInteger)page {
 	NSInteger generation = self.searchGeneration;
+	NSString *query = self.lastQuery;
 
 	__weak typeof(self) weakSelf = self;
-	void (^completion)(NSArray<IMAsset *> *_Nullable, NSError *_Nullable) = ^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
+	void (^completion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable) =
+	    ^(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf || generation != strongSelf.searchGeneration) {
+			return;
+		}
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
 			return;
 		}
 		strongSelf.searchTask = nil;
 		[strongSelf.activityIndicator stopAnimating];
 		if (error) {
-			strongSelf.emptyLabel.text = _(@"Search failed. Tap to retry.");
-			strongSelf.emptyLabel.hidden = NO;
+			if (page == 1) {
+				strongSelf.emptyLabel.text = _(@"Search failed. Tap to retry.");
+				strongSelf.emptyLabel.hidden = NO;
+			}
 			return;
 		}
-		strongSelf.emptyLabel.text = _(@"No results.");
-		strongSelf.resultAssets = assets ?: @[];
+		strongSelf.resultNextPage = nextPage.integerValue >= 1 ? nextPage.integerValue : 0;
+		if (page == 1) {
+			strongSelf.emptyLabel.text = _(@"No results.");
+			strongSelf.resultAssets = assets ?: @[];
+			strongSelf.emptyLabel.hidden = strongSelf.resultAssets.count > 0;
+		} else {
+			strongSelf.resultAssets = [strongSelf.resultAssets arrayByAddingObjectsFromArray:assets ?: @[]];
+		}
 		[strongSelf.collectionView reloadData];
-		strongSelf.emptyLabel.hidden = strongSelf.resultAssets.count > 0;
 	};
 
 	switch (self.scopeControl.selectedSegmentIndex) {
 		case IMSearchScopeOcr:
-			self.searchTask = [IMSearchApi metadataSearchWithOcr:query completion:completion];
+			self.searchTask = [IMSearchApi metadataSearchWithOcr:query page:page completion:completion];
 			break;
 		case IMSearchScopeDescription:
-			self.searchTask = [IMSearchApi metadataSearchWithDescription:query completion:completion];
+			self.searchTask = [IMSearchApi metadataSearchWithDescription:query page:page completion:completion];
 			break;
 		case IMSearchScopeFilename:
-			self.searchTask = [IMSearchApi metadataSearchWithFilename:query completion:completion];
+			self.searchTask = [IMSearchApi metadataSearchWithFilename:query page:page completion:completion];
 			break;
 		case IMSearchScopeContext:
 		default:
-			self.searchTask = [IMSearchApi smartSearchWithQuery:query completion:completion];
+			self.searchTask = [IMSearchApi smartSearchWithQuery:query page:page completion:completion];
 			break;
 	}
 }
@@ -400,6 +457,22 @@ static const CGFloat kScopeBarHeight = 44;
 
 #pragma mark - UICollectionViewDelegate
 
+- (void)collectionView:(UICollectionView *)collectionView
+        willDisplayCell:(UICollectionViewCell *)cell
+    forItemAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.mode == IMSearchModeResults) {
+		if (self.resultNextPage >= 1 && self.searchTask == nil &&
+		    indexPath.item + kResultColumns * 6 >= (NSInteger)self.resultAssets.count) {
+			[self fetchSearchPage:self.resultNextPage];
+		}
+		return;
+	}
+	if (indexPath.section == IMSearchBrowseSectionPeople &&
+	    indexPath.item + 40 >= (NSInteger)self.people.count) {
+		[self loadMorePeople];
+	}
+}
+
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
 	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
 
@@ -409,28 +482,74 @@ static const CGFloat kScopeBarHeight = 44;
 		return;
 	}
 
-	if (indexPath.section == IMSearchBrowseSectionPeople) {
-		IMPerson *person = self.people[indexPath.item];
-		[IMSearchApi metadataSearchWithPersonId:person.personId
-		                              completion:^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
-			    if (error || !assets) {
-				    return;
-			    }
-			    AssetGridViewController *grid = [AssetGridViewController gridWithTitle:person.name assets:assets];
-			    [self.navigationController pushViewController:grid animated:YES];
-		    }];
+	if (self.browseTask) {
 		return;
 	}
+	if (indexPath.section == IMSearchBrowseSectionPeople) {
+		[self pushGridForPerson:self.people[indexPath.item]];
+	} else {
+		[self pushGridForCity:self.placeCityNames[indexPath.item]];
+	}
+}
 
-	NSString *city = self.placeCityNames[indexPath.item];
-	[IMSearchApi metadataSearchWithCity:city
-	                          completion:^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
-		    if (error || !assets) {
-			    return;
-		    }
-		    AssetGridViewController *grid = [AssetGridViewController gridWithTitle:city assets:assets];
-		    [self.navigationController pushViewController:grid animated:YES];
-	    }];
+#pragma mark - Person/city tap-through
+
+- (void)pushGridForPerson:(IMPerson *)person {
+	NSString *title = person.name.length > 0 ? person.name : _(@"Unnamed");
+	NSString *personId = person.personId;
+	__weak typeof(self) weakSelf = self;
+	self.browseRetryAction = ^{ [weakSelf pushGridForPerson:person]; };
+	[self startBrowseTask:[IMSearchApi metadataSearchWithPersonId:personId
+	                                                          page:1
+	                                                    completion:[self browseCompletionWithTitle:title
+	                                                                                    pageLoader:^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
+		    return [IMSearchApi metadataSearchWithPersonId:personId page:page completion:pageCompletion];
+	    }]]];
+}
+
+- (void)pushGridForCity:(NSString *)city {
+	__weak typeof(self) weakSelf = self;
+	self.browseRetryAction = ^{ [weakSelf pushGridForCity:city]; };
+	[self startBrowseTask:[IMSearchApi metadataSearchWithCity:city
+	                                                      page:1
+	                                                completion:[self browseCompletionWithTitle:city
+	                                                                                pageLoader:^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
+		    return [IMSearchApi metadataSearchWithCity:city page:page completion:pageCompletion];
+	    }]]];
+}
+
+- (void)startBrowseTask:(nullable NSURLSessionTask *)task {
+	self.emptyLabel.hidden = YES;
+	[self.activityIndicator startAnimating];
+	self.browseTask = task;
+}
+
+- (void (^)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable))browseCompletionWithTitle:(NSString *)title
+                                                                                                    pageLoader:(IMAssetGridPageLoader)pageLoader {
+	__weak typeof(self) weakSelf = self;
+	return ^(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf) {
+			return;
+		}
+		strongSelf.browseTask = nil;
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+			return;
+		}
+		[strongSelf.activityIndicator stopAnimating];
+		if (error || !assets) {
+			if (strongSelf.mode == IMSearchModeBrowse) {
+				strongSelf.emptyLabel.text = _(@"Failed to load. Tap to retry.");
+				strongSelf.emptyLabel.hidden = NO;
+			}
+			return;
+		}
+		strongSelf.browseRetryAction = nil;
+		AssetGridViewController *grid = [AssetGridViewController gridWithTitle:title assets:assets];
+		grid.nextPageToken = nextPage;
+		grid.pageLoader = pageLoader;
+		[strongSelf.navigationController pushViewController:grid animated:YES];
+	};
 }
 
 @end

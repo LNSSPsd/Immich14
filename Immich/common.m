@@ -1,5 +1,8 @@
 #import "common.h"
 
+NSNotificationName const IMServerAssetsDidChangeNotification = @"IMServerAssetsDidChangeNotification";
+NSString *const IMChangedTimeBucketsUserInfoKey = @"changedTimeBuckets";
+
 NSDate *IMDateFromServerTimestamp(NSString *raw) {
 	if (raw.length == 0) {
 		return nil;
@@ -63,4 +66,43 @@ NSDate *IMDateFromServerTimestamp(NSString *raw) {
 		return date;
 	}
 	return [space dateFromString:raw];
+}
+
+NSString *IMTimeBucketKeyForDate(NSDate *date) {
+	if (!date) {
+		return nil;
+	}
+	static NSDateFormatter *formatter;
+	static NSCalendar *calendar;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+		calendar.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateFormat = @"yyyy-MM-dd";
+		formatter.timeZone = calendar.timeZone;
+	});
+	NSDateComponents *comps = [calendar components:(NSCalendarUnitYear | NSCalendarUnitMonth) fromDate:date];
+	comps.day = 1;
+	return [formatter stringFromDate:[calendar dateFromComponents:comps]];
+}
+
+NSInteger IMDurationMsFromJSONValue(id value) {
+	if ([value isKindOfClass:[NSNumber class]]) {
+		return [value integerValue];
+	}
+	if (![value isKindOfClass:[NSString class]]) {
+		return 0;
+	}
+	NSArray<NSString *> *parts = [(NSString *)value componentsSeparatedByString:@":"];
+	if (parts.count != 3) {
+		return 0;
+	}
+	NSInteger hours = [parts[0] integerValue];
+	NSInteger minutes = [parts[1] integerValue];
+	double seconds = [parts[2] doubleValue];
+	if (hours == 0 && minutes == 0 && seconds == 0) {
+		return 0;
+	}
+	return (NSInteger)llround(((hours * 60.0 + minutes) * 60.0 + seconds) * 1000.0);
 }

@@ -90,6 +90,12 @@ static const CGFloat kLabelsHeight = 44;
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
+	NSArray<IMAlbum *> *cached = [IMAlbumApi cachedAlbums];
+	if (cached.count > 0) {
+		self.albums = cached;
+		[self.collectionView reloadData];
+		self.emptyLabel.hidden = YES;
+	}
 	[self reload];
 }
 

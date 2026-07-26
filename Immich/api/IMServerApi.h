@@ -11,6 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)serverStorageWithCompletion:(void (^)(IMServerStorage *_Nullable storage, NSError *_Nullable error))completion;
 + (nullable IMServerStorage *)cachedServerStorage;
 
++ (void)clearCached;
+
 @end
 
 NS_ASSUME_NONNULL_END

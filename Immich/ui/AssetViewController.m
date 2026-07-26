@@ -5,6 +5,38 @@
 #import "IMThumbCache.h"
 #import "common.h"
 #import <AVKit/AVKit.h>
+#import <ImageIO/ImageIO.h>
+
+static NSString *IMVideoCacheDirectory(void) {
+	return [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMVideoCache"];
+}
+
+static CGFloat IMViewerMaxPixelSize(void) {
+	CGRect native = UIScreen.mainScreen.nativeBounds;
+	CGFloat longEdge = MAX(native.size.width, native.size.height);
+	return MIN(4096, longEdge * 2);
+}
+
+static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPixelSize) {
+	CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+	if (!source) {
+		return nil;
+	}
+	NSDictionary *options = @{
+		(__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+		(__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+		(__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
+		(__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(maxPixelSize),
+	};
+	CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+	CFRelease(source);
+	if (!cgImage) {
+		return nil;
+	}
+	UIImage *image = [UIImage imageWithCGImage:cgImage];
+	CGImageRelease(cgImage);
+	return image;
+}
 
 #pragma mark - IMOcrOverlayView (private): visible, same-size text layer + drag-to-select
 
@@ -225,6 +257,8 @@
 @property (nonatomic, strong, nullable) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong, nullable) AVPlayerViewController *playerViewController;
 @property (nonatomic, strong, nullable) NSURLSessionTask *loadTask;
+@property (nonatomic, strong, nullable) UILabel *errorLabel;
+@property (nonatomic) BOOL wantsAutoplay;
 @property (nonatomic) BOOL hasFitInitialZoom;
 @property (nonatomic, strong, nullable) IMOcrOverlayView *ocrOverlayView;
 @property (nonatomic, strong, nullable) NSNumber *ocrHasText;
@@ -254,10 +288,47 @@
 	]];
 	[self.spinner startAnimating];
 
+	self.errorLabel = [[UILabel alloc] init];
+	self.errorLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	self.errorLabel.text = _(@"Couldn't load. Tap to retry.");
+	self.errorLabel.textColor = UIColor.whiteColor;
+	self.errorLabel.textAlignment = NSTextAlignmentCenter;
+	self.errorLabel.numberOfLines = 0;
+	self.errorLabel.hidden = YES;
+	self.errorLabel.userInteractionEnabled = YES;
+	[self.errorLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(retryLoad)]];
+	[self.view addSubview:self.errorLabel];
+	[NSLayoutConstraint activateConstraints:@[
+		[self.errorLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+		[self.errorLabel.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+		[self.errorLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.leadingAnchor constant:24],
+	]];
+
 	if (self.asset.isImage) {
 		[self setUpImagePage];
 	} else {
 		[self setUpVideoPage];
+	}
+}
+
+- (void)showLoadError {
+	[self.spinner stopAnimating];
+	if (self.asset.isImage && self.imageView.image) {
+		return; 
+	}
+	self.errorLabel.hidden = NO;
+	[self.view bringSubviewToFront:self.errorLabel];
+}
+
+- (void)retryLoad {
+	if (!self.errorLabel.hidden) {
+		self.errorLabel.hidden = YES;
+		[self.spinner startAnimating];
+		if (self.asset.isImage) {
+			[self startImageLoad];
+		} else {
+			[self startVideoLoad];
+		}
 	}
 }
 
@@ -292,12 +363,6 @@
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
 
-	[[IMThumbCache shared] thumbnailForAssetId:assetId
-	                                        size:IMAssetMediaSizePreview
-	                                  completion:^(UIImage *_Nullable image) {
-		    [weakSelf showImage:image];
-	    }];
-
 	[IMAssetApi ocrLinesForAssetId:assetId
 	                     completion:^(NSArray<IMOcrLine *> *_Nullable lines, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
@@ -313,24 +378,53 @@
 		    }
 	    }];
 
+	[self startImageLoad];
+}
+
+- (void)startImageLoad {
+	NSString *assetId = self.asset.assetId;
+	__weak typeof(self) weakSelf = self;
+
+	[[IMThumbCache shared] thumbnailForAssetId:assetId
+	                                        size:IMAssetMediaSizePreview
+	                                  completion:^(UIImage *_Nullable image) {
+		    [weakSelf showImage:image];
+	    }];
+
+	CGFloat maxPixelSize = IMViewerMaxPixelSize();
 	self.loadTask = [IMAssetApi originalDataForAssetId:assetId
 	                                          completion:^(NSData *_Nullable data, NSError *_Nullable error) {
-		    if (!data) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf) {
 			    return;
 		    }
-		    UIImage *original = [UIImage imageWithData:data];
-		    if (original) {
-			    [weakSelf showImage:original];
+		    if (!data) {
+			    [strongSelf showLoadError];
+			    return;
 		    }
+		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+			    UIImage *original = IMDownsampledImageFromData(data, maxPixelSize);
+			    dispatch_async(dispatch_get_main_queue(), ^{
+				    typeof(self) innerSelf = weakSelf;
+				    if (!innerSelf) {
+					    return;
+				    }
+				    if (original) {
+					    [innerSelf showImage:original];
+				    } else {
+					    [innerSelf showLoadError];
+				    }
+			    });
+		    });
 	    }];
 }
 
 - (void)showImage:(nullable UIImage *)image {
 	if (!image) {
-		[self.spinner stopAnimating];
 		return;
 	}
 	[self.spinner stopAnimating];
+	self.errorLabel.hidden = YES;
 
 	CGFloat relativeZoom = 1.0;
 	if (self.hasFitInitialZoom && self.scrollView.minimumZoomScale > 0) {
@@ -398,6 +492,9 @@
 	if (!self.asset.isImage) {
 		return;
 	}
+	if (visible && !self.ocrHasText.boolValue) {
+		return;
+	}
 	self.ocrVisible = visible;
 	self.ocrOverlayView.hidden = !visible;
 	self.scrollView.panGestureRecognizer.enabled = !visible;
@@ -430,29 +527,73 @@
 		[self.playerViewController.view.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 	]];
 	[self.playerViewController didMoveToParentViewController:self];
+	[self.view bringSubviewToFront:self.spinner];
+	[self.view bringSubviewToFront:self.errorLabel];
 
+	[self startVideoLoad];
+}
+
+- (void)startVideoLoad {
 	NSString *assetId = self.asset.assetId;
+	NSString *cachePath = [IMVideoCacheDirectory() stringByAppendingPathComponent:
+	                                                   [NSString stringWithFormat:@"%@.mp4", assetId]];
+	NSFileManager *fileManager = [NSFileManager defaultManager];
+	if ([fileManager fileExistsAtPath:cachePath]) {
+		[fileManager setAttributes:@{ NSFileModificationDate: [NSDate date] } ofItemAtPath:cachePath error:NULL];
+		[self attachPlayerWithPath:cachePath];
+		return;
+	}
 	__weak typeof(self) weakSelf = self;
 	self.loadTask = [IMAssetApi videoPlaybackDataForAssetId:assetId
 	                                              completion:^(NSData *_Nullable data, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
-		    [strongSelf.spinner stopAnimating];
-		    if (!strongSelf || !data) {
+		    if (!strongSelf) {
 			    return;
 		    }
-		    NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-		                                                      [NSString stringWithFormat:@"%@.mp4", assetId]];
-		    if ([data writeToFile:tempPath atomically:YES]) {
-			    strongSelf.playerViewController.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:tempPath]];
+		    if (!data) {
+			    [strongSelf showLoadError];
+			    return;
 		    }
+		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+			    [[NSFileManager defaultManager] createDirectoryAtPath:IMVideoCacheDirectory()
+			                                withIntermediateDirectories:YES
+			                                                 attributes:nil
+			                                                      error:NULL];
+			    BOOL wrote = [data writeToFile:cachePath atomically:YES];
+			    dispatch_async(dispatch_get_main_queue(), ^{
+				    typeof(self) innerSelf = weakSelf;
+				    if (!innerSelf) {
+					    return;
+				    }
+				    if (wrote) {
+					    [innerSelf attachPlayerWithPath:cachePath];
+				    } else {
+					    [innerSelf showLoadError];
+				    }
+			    });
+		    });
 	    }];
 }
 
+- (void)attachPlayerWithPath:(NSString *)path {
+	[self.spinner stopAnimating];
+	self.errorLabel.hidden = YES;
+	self.playerViewController.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	if (self.wantsAutoplay) {
+		[self.playerViewController.player play];
+	}
+}
+
 - (void)playIfVideo {
+	if (self.asset.isImage) {
+		return;
+	}
+	self.wantsAutoplay = YES; 
 	[self.playerViewController.player play];
 }
 
 - (void)pauseIfVideo {
+	self.wantsAutoplay = NO;
 	[self.playerViewController.player pause];
 }
 
@@ -479,6 +620,9 @@
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
 @property (nonatomic, strong) UIButton *ocrButton;
 @property (nonatomic, strong) UIButton *addToAlbumButton;
+@property (nonatomic, strong) UIButton *favoriteButton;
+@property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *favoriteOverrides;
 @property (nonatomic) BOOL ocrOn;
 @end
 
@@ -488,14 +632,34 @@
 	AssetViewController *vc = [[AssetViewController alloc] init];
 	vc.assets = assets;
 	vc.currentIndex = startIndex;
+	vc.favoriteOverrides = [NSMutableDictionary dictionary];
 	vc.modalPresentationStyle = UIModalPresentationFullScreen;
 	vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
 	return vc;
 }
 
++ (void)pruneVideoCache {
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+			NSFileManager *fileManager = [NSFileManager defaultManager];
+			NSString *directory = IMVideoCacheDirectory();
+			NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-3 * 24 * 60 * 60];
+			for (NSString *name in [fileManager contentsOfDirectoryAtPath:directory error:NULL]) {
+				NSString *path = [directory stringByAppendingPathComponent:name];
+				NSDate *modified = [fileManager attributesOfItemAtPath:path error:NULL][NSFileModificationDate];
+				if (modified && [modified compare:cutoff] == NSOrderedAscending) {
+					[fileManager removeItemAtPath:path error:NULL];
+				}
+			}
+		});
+	});
+}
+
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	self.view.backgroundColor = UIColor.blackColor;
+	[AssetViewController pruneVideoCache];
 
 	self.pageViewController = [[UIPageViewController alloc] initWithTransitionStyle:UIPageViewControllerTransitionStyleScroll
 	                                                              navigationOrientation:UIPageViewControllerNavigationOrientationHorizontal
@@ -541,6 +705,14 @@
 	self.bottomBar = [self blurBar];
 	[self.view addSubview:self.bottomBar];
 
+	self.shareButton = [self chromeButtonWithSymbol:@"square.and.arrow.up"];
+	[self.shareButton addTarget:self action:@selector(shareTapped) forControlEvents:UIControlEventTouchUpInside];
+	[self.bottomBar.contentView addSubview:self.shareButton];
+
+	self.favoriteButton = [self chromeButtonWithSymbol:@"heart"];
+	[self.favoriteButton addTarget:self action:@selector(favoriteTapped) forControlEvents:UIControlEventTouchUpInside];
+	[self.bottomBar.contentView addSubview:self.favoriteButton];
+
 	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
 	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.addToAlbumButton];
@@ -568,15 +740,23 @@
 		[self.bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 		[self.bottomBar.topAnchor constraintEqualToAnchor:infoButton.topAnchor constant:-10],
 
-		[self.addToAlbumButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
-		[self.addToAlbumButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+		[self.shareButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+		[self.shareButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+
+		[self.favoriteButton.leadingAnchor constraintEqualToAnchor:self.shareButton.trailingAnchor constant:32],
+		[self.favoriteButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
 
 		[infoButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
 		[infoButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-6],
 
+		[self.addToAlbumButton.trailingAnchor constraintEqualToAnchor:self.ocrButton.leadingAnchor constant:-32],
+		[self.addToAlbumButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+
 		[self.ocrButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
 		[self.ocrButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
 	]];
+
+	[self updateFavoriteButton];
 }
 
 - (UIVisualEffectView *)blurBar {
@@ -615,6 +795,99 @@
 	[self presentViewController:nav animated:YES completion:nil];
 }
 
+- (BOOL)isCurrentAssetFavorite {
+	IMAsset *asset = self.assets[self.currentIndex];
+	NSNumber *override = self.favoriteOverrides[asset.assetId];
+	return override ? override.boolValue : asset.isFavorite;
+}
+
+- (void)updateFavoriteButton {
+	BOOL favorite = [self isCurrentAssetFavorite];
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		[self.favoriteButton setImage:[UIImage systemImageNamed:(favorite ? @"heart.fill" : @"heart") withConfiguration:config]
+		                     forState:UIControlStateNormal];
+	}
+	self.favoriteButton.tintColor = favorite ? UIColor.systemRedColor : UIColor.whiteColor;
+}
+
+- (void)favoriteTapped {
+	IMAsset *asset = self.assets[self.currentIndex];
+	NSString *assetId = asset.assetId;
+	BOOL newValue = ![self isCurrentAssetFavorite];
+	self.favoriteOverrides[assetId] = @(newValue); 
+	[self updateFavoriteButton];
+	__weak typeof(self) weakSelf = self;
+	[IMAssetApi setFavorite:newValue
+	            forAssetIds:@[ assetId ]
+	             completion:^(BOOL success, NSError *_Nullable error) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || success) {
+			    return;
+		    }
+		    strongSelf.favoriteOverrides[assetId] = @(!newValue);
+		    [strongSelf updateFavoriteButton];
+	    }];
+}
+
+- (void)shareTapped {
+	IMAsset *asset = self.assets[self.currentIndex];
+	NSString *assetId = asset.assetId;
+	NSString *fallbackName = [NSString stringWithFormat:@"%@.%@", assetId, asset.isImage ? @"jpg" : @"mp4"];
+	self.shareButton.enabled = NO;
+	__weak typeof(self) weakSelf = self;
+	[IMAssetApi assetDetailForAssetId:assetId
+	                        completion:^(IMAssetDetail *_Nullable detail, NSError *_Nullable error) {
+		    NSString *filename = detail.originalFileName.length > 0 ? detail.originalFileName : fallbackName;
+		    filename = [filename stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+		    [IMAssetApi originalDataForAssetId:assetId
+		                             completion:^(NSData *_Nullable data, NSError *_Nullable dataError) {
+			    typeof(self) strongSelf = weakSelf;
+			    if (!strongSelf) {
+				    return;
+			    }
+			    if (!data) {
+				    strongSelf.shareButton.enabled = YES;
+				    [strongSelf presentShareFailure];
+				    return;
+			    }
+			    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+				    NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMShare"];
+				    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+				                                withIntermediateDirectories:YES
+				                                                 attributes:nil
+				                                                      error:NULL];
+				    NSString *path = [directory stringByAppendingPathComponent:filename];
+				    BOOL wrote = [data writeToFile:path atomically:YES];
+				    dispatch_async(dispatch_get_main_queue(), ^{
+					    typeof(self) innerSelf = weakSelf;
+					    if (!innerSelf) {
+						    return;
+					    }
+					    innerSelf.shareButton.enabled = YES;
+					    if (!wrote) {
+						    [innerSelf presentShareFailure];
+						    return;
+					    }
+					    UIActivityViewController *activity =
+					        [[UIActivityViewController alloc] initWithActivityItems:@[ [NSURL fileURLWithPath:path] ]
+					                                          applicationActivities:nil];
+					    activity.popoverPresentationController.sourceView = innerSelf.shareButton;
+					    [innerSelf presentViewController:activity animated:YES completion:nil];
+				    });
+			    });
+		    }];
+	    }];
+}
+
+- (void)presentShareFailure {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Couldn't Share")
+	                                                               message:_(@"The original file could not be downloaded.")
+	                                                        preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)ocrTapped {
 	self.ocrOn = !self.ocrOn;
 	if (@available(iOS 13.0, *)) {
@@ -634,6 +907,9 @@
 		typeof(self) strongSelf = weakSelf;
 		if (strongSelf && strongSelf.pageViewController.viewControllers.firstObject == weakPage) {
 			strongSelf.ocrButton.hidden = !hasText;
+			if (strongSelf.ocrOn && hasText) {
+				[weakPage setOCRVisible:YES]; 
+			}
 		}
 	};
 	return page;
@@ -665,15 +941,16 @@
         didFinishAnimating:(BOOL)finished
    previousViewControllers:(NSArray<UIViewController *> *)previousViewControllers
        transitionCompleted:(BOOL)completed {
-	for (AssetPageContentViewController *previous in previousViewControllers) {
-		[previous pauseIfVideo];
-	}
 	if (!completed) {
 		return;
+	}
+	for (AssetPageContentViewController *previous in previousViewControllers) {
+		[previous pauseIfVideo];
 	}
 	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
 	self.currentIndex = [self indexOfPage:current];
 	[current playIfVideo];
+	[self updateFavoriteButton];
 
 	self.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	if (self.ocrOn) {

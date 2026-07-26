@@ -4,6 +4,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 extern NSErrorDomain const IMApiErrorDomain;
 
+extern NSString *const IMApiErrorStatusCodeKey;
+
 typedef void (^IMJSONHandler)(id _Nullable json, NSError *_Nullable error);
 typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
 
@@ -11,7 +13,15 @@ typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
 
 + (instancetype)shared;
 
++ (NSInteger)HTTPStatusForError:(nullable NSError *)error;
+
 - (instancetype)initWithBaseURL:(NSURL *)baseURL;
+
+@property (nonatomic, copy, nullable) NSString *overrideAPIKey;
+
+- (void)invalidate;
+
+- (void)resetConnections;
 
 - (NSURLSessionTask *)GET:(NSString *)path
                     query:(nullable NSDictionary<NSString *, NSString *> *)query
