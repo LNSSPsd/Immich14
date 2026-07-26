@@ -55,7 +55,7 @@ typedef NS_ENUM(NSInteger, IMSearchScope) {
 	IMSearchScopeFilename = 3,    
 };
 
-@interface SearchViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchResultsUpdating>
+@interface SearchViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchResultsUpdating, IMZoomTransitionSource>
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UISearchController *searchController;
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -478,6 +478,8 @@ static const CGFloat kScopeBarHeight = 44;
 
 	if (self.mode == IMSearchModeResults) {
 		AssetViewController *viewer = [AssetViewController viewerWithAssets:self.resultAssets startIndex:indexPath.item];
+		viewer.zoomSource = self;
+		viewer.presentSourceImageView = ((TimelineCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;
 		[self presentViewController:viewer animated:YES completion:nil];
 		return;
 	}
@@ -550,6 +552,30 @@ static const CGFloat kScopeBarHeight = 44;
 		grid.pageLoader = pageLoader;
 		[strongSelf.navigationController pushViewController:grid animated:YES];
 	};
+}
+
+#pragma mark - IMZoomTransitionSource
+
+- (nullable UIImageView *)zoomTransitionImageViewForAssetId:(NSString *)assetId {
+	if (self.mode != IMSearchModeResults) {
+		return nil; 
+	}
+	NSUInteger item = [self.resultAssets indexOfObjectPassingTest:^BOOL(IMAsset *asset, NSUInteger idx, BOOL *stop) {
+		return [asset.assetId isEqualToString:assetId];
+	}];
+	if (item == NSNotFound) {
+		return nil;
+	}
+	NSIndexPath *indexPath = [NSIndexPath indexPathForItem:(NSInteger)item inSection:0];
+	TimelineCell *cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	if (!cell) {
+		[self.collectionView scrollToItemAtIndexPath:indexPath
+		                            atScrollPosition:UICollectionViewScrollPositionCenteredVertically
+		                                    animated:NO];
+		[self.collectionView layoutIfNeeded];
+		cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	}
+	return cell.imageView;
 }
 
 @end

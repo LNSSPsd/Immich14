@@ -38,6 +38,7 @@ FRAMEWORKS := \
 	-framework PhotosUI \
 	-framework AVFoundation \
 	-framework AVKit \
+	-framework CoreMedia \
 	-framework Security \
 	-framework SystemConfiguration \
 	-framework Network \
@@ -74,7 +75,9 @@ all: build/$(APP_NAME).ipa
 
 $(OBJECTS): build/objects/%.o: %
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJECTS:.o=.d)
 
 $(BIN): $(OBJECTS) $(ENTITLEMENTS)
 	@mkdir -p $(@D)

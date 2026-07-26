@@ -25,6 +25,18 @@ static const CGFloat kLabelsHeight = 44;
 	return self;
 }
 
+- (void)setAlbums:(NSArray<IMAlbum *> *)albums {
+	_albums = [albums sortedArrayWithOptions:NSSortStable
+	                         usingComparator:^NSComparisonResult(IMAlbum *a, IMAlbum *b) {
+		BOOL aEmpty = a.assetCount == 0;
+		BOOL bEmpty = b.assetCount == 0;
+		if (aEmpty == bEmpty) {
+			return NSOrderedSame;
+		}
+		return aEmpty ? NSOrderedDescending : NSOrderedAscending;
+	}];
+}
+
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	self.title = _(@"Albums");

@@ -5,7 +5,7 @@
 #import "AssetViewController.h"
 #import "common.h"
 
-@interface AlbumDetailViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
+@interface AlbumDetailViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, IMZoomTransitionSource>
 @property (nonatomic, strong) IMAlbum *album;
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UIRefreshControl *refreshControl;
@@ -525,6 +525,8 @@ static const CGFloat kCellSpacing = 2;
 	if (!self.selecting) {
 		[collectionView deselectItemAtIndexPath:indexPath animated:YES];
 		AssetViewController *viewer = [AssetViewController viewerWithAssets:self.assets startIndex:indexPath.item];
+		viewer.zoomSource = self;
+		viewer.presentSourceImageView = ((TimelineCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;
 		[self presentViewController:viewer animated:YES completion:nil];
 		return;
 	}
@@ -542,6 +544,27 @@ static const CGFloat kCellSpacing = 2;
 	}
 	[self.selectedAssets removeObjectForKey:self.assets[indexPath.item].assetId];
 	[self updateSelectionToolbarState];
+}
+
+#pragma mark - IMZoomTransitionSource
+
+- (nullable UIImageView *)zoomTransitionImageViewForAssetId:(NSString *)assetId {
+	NSUInteger item = [self.assets indexOfObjectPassingTest:^BOOL(IMAsset *asset, NSUInteger idx, BOOL *stop) {
+		return [asset.assetId isEqualToString:assetId];
+	}];
+	if (item == NSNotFound) {
+		return nil;
+	}
+	NSIndexPath *indexPath = [NSIndexPath indexPathForItem:(NSInteger)item inSection:0];
+	TimelineCell *cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	if (!cell) {
+		[self.collectionView scrollToItemAtIndexPath:indexPath
+		                            atScrollPosition:UICollectionViewScrollPositionCenteredVertically
+		                                    animated:NO];
+		[self.collectionView layoutIfNeeded];
+		cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	}
+	return cell.imageView;
 }
 
 @end

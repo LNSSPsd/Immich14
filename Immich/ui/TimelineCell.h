@@ -11,6 +11,8 @@ extern NSString *const TimelineCellReuseIdentifier;
 
 @property (nonatomic) BOOL selectionModeEnabled;
 
+@property (nonatomic, strong, readonly) UIImageView *imageView;
+
 - (void)configureWithAsset:(nullable IMAsset *)asset;
 
 - (void)configureWithLocalAsset:(nullable PHAsset *)asset syncState:(IMSyncState)state;

@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) double ratio; 
 @property (nonatomic, copy, readonly, nullable) NSString *city; 
 @property (nonatomic, copy, readonly, nullable) NSString *country;
+@property (nonatomic, copy, readonly, nullable) NSString *livePhotoVideoId;
 
 + (NSArray<IMAsset *> *)assetsFromTimeBucketJSON:(NSDictionary *)json;
 
@@ -25,7 +26,8 @@ NS_ASSUME_NONNULL_BEGIN
                  durationMs:(NSInteger)durationMs
                       ratio:(double)ratio
                        city:(nullable NSString *)city
-                    country:(nullable NSString *)country;
+                    country:(nullable NSString *)country
+           livePhotoVideoId:(nullable NSString *)livePhotoVideoId;
 
 @end
 

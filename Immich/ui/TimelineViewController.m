@@ -37,7 +37,7 @@ static const CGFloat kFooterHeight = 56;
 }
 @end
 
-@interface TimelineViewController () <UICollectionViewDataSource, UICollectionViewDelegate, PHPhotoLibraryChangeObserver>
+@interface TimelineViewController () <UICollectionViewDataSource, UICollectionViewDelegate, PHPhotoLibraryChangeObserver, IMZoomTransitionSource>
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -232,6 +232,7 @@ static const CGFloat kCellSpacing = 2;
 				[strongSelf.bucketAssets removeObjectForKey:bucket];
 			}
 		}
+		[strongSelf.collectionView reloadData];
 		[strongSelf refreshBuckets];
 		[strongSelf refreshAssetStatistics];
 	}];
@@ -246,6 +247,7 @@ static const CGFloat kCellSpacing = 2;
 	} else {
 		[self.bucketAssets removeAllObjects];
 	}
+	[self.collectionView reloadData];
 	[self refreshBuckets];
 	[self refreshAssetStatistics];
 }
@@ -458,6 +460,7 @@ static const CGFloat kCellSpacing = 2;
 		[self toggleSelecting];
 	}
 	[self.bucketAssets removeAllObjects];
+	[self.collectionView reloadData];
 	[self refreshBuckets];
 	[self refreshLocalPendingAssets];
 	[self refreshAssetStatistics];
@@ -569,15 +572,20 @@ static const CGFloat kCellSpacing = 2;
 	    self.serverBucketCounts[bucket] == nil) {
 		return;
 	}
+	[self.loadingBuckets addObject:bucket];
+	__weak typeof(self) weakSelf = self;
 
 	NSArray<IMAsset *> *cached = [[IMDatabase shared] cachedAssetsForTimeBucket:bucket];
 	if (cached.count > 0) {
-		self.bucketAssets[bucket] = cached.reverseObjectEnumerator.allObjects;
-		[self reloadSectionForBucket:bucket];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || strongSelf.bucketAssets[bucket]) {
+				return; 
+			}
+			strongSelf.bucketAssets[bucket] = cached.reverseObjectEnumerator.allObjects;
+			[strongSelf reloadSectionForBucket:bucket];
+		});
 	}
-
-	[self.loadingBuckets addObject:bucket];
-	__weak typeof(self) weakSelf = self;
 	[IMAssetApi assetsInTimeBucket:bucket
 	                     completion:^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
@@ -595,11 +603,10 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)reloadSectionForBucket:(NSString *)bucket {
-	NSUInteger section = [self.bucketDates indexOfObject:bucket];
-	if (section == NSNotFound || section >= (NSUInteger)self.collectionView.numberOfSections) {
+	if ([self.bucketDates indexOfObject:bucket] == NSNotFound) {
 		return;
 	}
-	[self.collectionView reloadSections:[NSIndexSet indexSetWithIndex:section]];
+	[self.collectionView reloadData];
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		[weakSelf updateTitleBarForScrollPosition];
@@ -750,6 +757,8 @@ static const CGFloat kCellSpacing = 2;
 		}
 		AssetViewController *viewer = [AssetViewController viewerWithAssets:self.bucketAssets[bucket]
 		                                                        startIndex:indexPath.item];
+		viewer.zoomSource = self; 
+		viewer.presentSourceImageView = ((TimelineCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;
 		[self presentViewController:viewer animated:YES completion:nil];
 		return;
 	}
@@ -772,6 +781,39 @@ static const CGFloat kCellSpacing = 2;
 	}
 	[self.selectedAssets removeObjectForKey:asset.assetId];
 	[self updateSelectionToolbarState];
+}
+
+#pragma mark - IMZoomTransitionSource
+
+- (nullable NSIndexPath *)indexPathForAssetId:(NSString *)assetId {
+	for (NSInteger section = 0; section < (NSInteger)self.bucketDates.count; section++) {
+		NSArray<IMAsset *> *assets = self.bucketAssets[self.bucketDates[section]];
+		for (NSInteger item = 0; item < (NSInteger)assets.count; item++) {
+			if ([assets[item].assetId isEqualToString:assetId]) {
+				return [NSIndexPath indexPathForItem:item inSection:section];
+			}
+		}
+	}
+	return nil;
+}
+
+- (nullable UIImageView *)zoomTransitionImageViewForAssetId:(NSString *)assetId {
+	if (self.clusterMode) {
+		return nil; 
+	}
+	NSIndexPath *indexPath = [self indexPathForAssetId:assetId];
+	if (!indexPath) {
+		return nil;
+	}
+	TimelineCell *cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	if (!cell) {
+		[self.collectionView scrollToItemAtIndexPath:indexPath
+		                            atScrollPosition:UICollectionViewScrollPositionCenteredVertically
+		                                    animated:NO];
+		[self.collectionView layoutIfNeeded];
+		cell = (TimelineCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	}
+	return cell.imageView;
 }
 
 #pragma mark - UIScrollViewDelegate

@@ -1,11 +1,19 @@
 #import <UIKit/UIKit.h>
 #import "IMAsset.h"
+#import "IMZoomTransition.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
 @interface AssetViewController : UIViewController
 
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets startIndex:(NSInteger)startIndex;
+
+@property (nonatomic, weak, nullable) id<IMZoomTransitionSource> zoomSource;
+
+@property (nonatomic, weak, nullable) UIImageView *presentSourceImageView;
+
+- (IMAsset *)currentAsset;
+- (nullable UIImageView *)currentPageImageView;
 
 @end
 

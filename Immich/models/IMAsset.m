@@ -14,6 +14,7 @@ static id IMValueOrNil(id value) {
 @property (nonatomic) double ratio;
 @property (nonatomic, copy) NSString *city;
 @property (nonatomic, copy) NSString *country;
+@property (nonatomic, copy) NSString *livePhotoVideoId;
 @end
 
 @implementation IMAsset
@@ -30,6 +31,7 @@ static id IMValueOrNil(id value) {
 	NSArray *ratio = json[@"ratio"];
 	NSArray *city = json[@"city"];
 	NSArray *country = json[@"country"];
+	NSArray *livePhotoVideoId = json[@"livePhotoVideoId"];
 
 	NSMutableArray<IMAsset *> *assets = [NSMutableArray arrayWithCapacity:ids.count];
 	for (NSUInteger i = 0; i < ids.count; i++) {
@@ -45,6 +47,8 @@ static id IMValueOrNil(id value) {
 		asset.city = [cityValue isKindOfClass:[NSString class]] ? cityValue : nil;
 		id countryValue = (i < country.count) ? IMValueOrNil(country[i]) : nil;
 		asset.country = [countryValue isKindOfClass:[NSString class]] ? countryValue : nil;
+		id liveValue = (i < livePhotoVideoId.count) ? IMValueOrNil(livePhotoVideoId[i]) : nil;
+		asset.livePhotoVideoId = [liveValue isKindOfClass:[NSString class]] ? liveValue : nil;
 		[assets addObject:asset];
 	}
 	return assets;
@@ -77,6 +81,8 @@ static id IMValueOrNil(id value) {
 	double width = [widthValue isKindOfClass:[NSNumber class]] ? [widthValue doubleValue] : 0;
 	double height = [heightValue isKindOfClass:[NSNumber class]] ? [heightValue doubleValue] : 0;
 	asset.ratio = height > 0 ? width / height : 1.0;
+	id liveValue = IMValueOrNil(dict[@"livePhotoVideoId"]);
+	asset.livePhotoVideoId = [liveValue isKindOfClass:[NSString class]] ? liveValue : nil;
 	return asset;
 }
 
@@ -101,7 +107,8 @@ static id IMValueOrNil(id value) {
                  durationMs:(NSInteger)durationMs
                       ratio:(double)ratio
                        city:(NSString *)city
-                    country:(NSString *)country {
+                    country:(NSString *)country
+           livePhotoVideoId:(NSString *)livePhotoVideoId {
 	IMAsset *asset = [[IMAsset alloc] init];
 	asset.assetId = assetId;
 	asset.fileCreatedAt = fileCreatedAt;
@@ -111,6 +118,7 @@ static id IMValueOrNil(id value) {
 	asset.ratio = ratio;
 	asset.city = city;
 	asset.country = country;
+	asset.livePhotoVideoId = livePhotoVideoId;
 	return asset;
 }
 

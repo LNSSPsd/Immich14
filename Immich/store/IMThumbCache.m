@@ -109,11 +109,15 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 
 	UIImage *cached = [self.memoryCache objectForKey:key];
 	if (cached) {
-		dispatch_async(dispatch_get_main_queue(), ^{
-			if (!task.cancelled) {
-				completion(cached);
-			}
-		});
+		if (NSThread.isMainThread) {
+			completion(cached);
+		} else {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				if (!task.cancelled) {
+					completion(cached);
+				}
+			});
+		}
 		return task;
 	}
 

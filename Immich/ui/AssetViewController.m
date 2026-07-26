@@ -4,11 +4,17 @@
 #import "IMAssetApi.h"
 #import "IMThumbCache.h"
 #import "common.h"
-#import <AVKit/AVKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <ImageIO/ImageIO.h>
+#import <PhotosUI/PhotosUI.h>
+#import <objc/message.h>
 
 static NSString *IMVideoCacheDirectory(void) {
 	return [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMVideoCache"];
+}
+
+static NSString *IMLivePairDirectory(void) {
+	return [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMLiveCache"];
 }
 
 static CGFloat IMViewerMaxPixelSize(void) {
@@ -243,19 +249,20 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 @property (nonatomic, strong, readonly) IMAsset *asset;
 @property (nonatomic, copy, nullable) void (^onOCRAvailabilityKnown)(BOOL hasText);
 @property (nonatomic, strong, readonly, nullable) NSNumber *ocrHasText;
+@property (nonatomic, strong, nullable) UIImage *placeholderImage;
 - (instancetype)initWithAsset:(IMAsset *)asset;
 - (void)playIfVideo;
 - (void)pauseIfVideo;
 - (BOOL)canBeginDismissPan;
+- (nullable UIImageView *)transitionImageViewForDismissal;
 - (void)setOCRVisible:(BOOL)visible;
 @end
 
-@interface AssetPageContentViewController () <UIScrollViewDelegate>
+@interface AssetPageContentViewController () <UIScrollViewDelegate, PHLivePhotoViewDelegate>
 @property (nonatomic, strong) IMAsset *asset;
 @property (nonatomic, strong, nullable) UIScrollView *scrollView;
 @property (nonatomic, strong, nullable) UIImageView *imageView;
 @property (nonatomic, strong, nullable) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong, nullable) AVPlayerViewController *playerViewController;
 @property (nonatomic, strong, nullable) NSURLSessionTask *loadTask;
 @property (nonatomic, strong, nullable) UILabel *errorLabel;
 @property (nonatomic) BOOL wantsAutoplay;
@@ -263,7 +270,40 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 @property (nonatomic, strong, nullable) IMOcrOverlayView *ocrOverlayView;
 @property (nonatomic, strong, nullable) NSNumber *ocrHasText;
 @property (nonatomic) BOOL ocrVisible;
+
+@property (nonatomic, strong, nullable) AVPlayer *player;
+@property (nonatomic, strong, nullable) AVPlayerLayer *playerLayer;
+@property (nonatomic, strong, nullable) UIImageView *posterView; 
+@property (nonatomic, copy, nullable) NSString *videoFilePath;
+@property (nonatomic, strong, nullable) UIVisualEffectView *videoControlsBar;
+@property (nonatomic, strong, nullable) UIButton *playPauseButton;
+@property (nonatomic, strong, nullable) UIButton *muteButton;
+@property (nonatomic, strong, nullable) UISlider *videoSlider;
+@property (nonatomic, strong, nullable) UILabel *elapsedLabel;
+@property (nonatomic, strong, nullable) UILabel *remainingLabel;
+@property (nonatomic, strong, nullable) id timeObserverToken;
+@property (nonatomic) BOOL scrubbing;
+@property (nonatomic) BOOL scrubbingWasPlaying;
+@property (nonatomic) BOOL playbackReachedEnd;
+
+@property (nonatomic, strong, nullable) NSURLSessionTask *liveVideoTask;
+@property (nonatomic, copy, nullable) NSString *livePairImagePath;
+@property (nonatomic, copy, nullable) NSString *livePairVideoPath;
+@property (nonatomic, strong, nullable) PHLivePhoto *livePhoto;
+@property (nonatomic, strong, nullable) PHLivePhotoView *livePhotoView;
+@property (nonatomic, strong, nullable) UIVisualEffectView *liveBadgeView;
+@property (nonatomic) PHLivePhotoRequestID livePhotoRequestId;
 @end
+
+static void *IMPlayerLayerReadyForDisplayContext = &IMPlayerLayerReadyForDisplayContext;
+
+static NSString *IMTimeString(NSTimeInterval seconds) {
+	if (!isfinite(seconds) || seconds < 0) {
+		seconds = 0;
+	}
+	NSInteger total = (NSInteger)(seconds + 0.5);
+	return [NSString stringWithFormat:@"%ld:%02ld", (long)(total / 60), (long)(total % 60)];
+}
 
 @implementation AssetPageContentViewController
 
@@ -360,6 +400,10 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 		[self.scrollView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 	]];
 
+	if (self.placeholderImage) {
+		[self showImage:self.placeholderImage];
+	}
+
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
 
@@ -402,6 +446,7 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 			    [strongSelf showLoadError];
 			    return;
 		    }
+		    [strongSelf stageLivePairImageData:data];
 		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
 			    UIImage *original = IMDownsampledImageFromData(data, maxPixelSize);
 			    dispatch_async(dispatch_get_main_queue(), ^{
@@ -439,6 +484,18 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 
 - (void)viewDidLayoutSubviews {
 	[super viewDidLayoutSubviews];
+	if (!self.asset.isImage) {
+		if (!self.playerLayer.hidden) {
+			[CATransaction begin];
+			[CATransaction setDisableActions:YES];
+			self.playerLayer.frame = self.view.bounds;
+			[CATransaction commit];
+			if (!self.posterView.hidden) {
+				self.posterView.frame = self.view.bounds;
+			}
+		}
+		return;
+	}
 	if (self.imageView.image && !self.hasFitInitialZoom) {
 		[self fitImagePreservingRelativeZoom:1.0];
 	} else {
@@ -514,23 +571,103 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 #pragma mark Video page
 
 - (void)setUpVideoPage {
-	self.playerViewController = [[AVPlayerViewController alloc] init];
-	self.playerViewController.showsPlaybackControls = YES;
-	[self addChildViewController:self.playerViewController];
-	self.playerViewController.view.translatesAutoresizingMaskIntoConstraints = NO;
-	self.playerViewController.view.backgroundColor = UIColor.blackColor;
-	[self.view addSubview:self.playerViewController.view];
-	[NSLayoutConstraint activateConstraints:@[
-		[self.playerViewController.view.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-		[self.playerViewController.view.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-		[self.playerViewController.view.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-		[self.playerViewController.view.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-	]];
-	[self.playerViewController didMoveToParentViewController:self];
-	[self.view bringSubviewToFront:self.spinner];
-	[self.view bringSubviewToFront:self.errorLabel];
+	self.posterView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+	self.posterView.contentMode = UIViewContentModeScaleAspectFit;
+	self.posterView.image = self.placeholderImage;
+	[self.view insertSubview:self.posterView atIndex:0];
 
+	NSString *assetId = self.asset.assetId;
+	__weak typeof(self) weakSelf = self;
+	[[IMThumbCache shared] thumbnailForAssetId:assetId
+	                                        size:IMAssetMediaSizePreview
+	                                  completion:^(UIImage *_Nullable image) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (strongSelf && image && !strongSelf.playerLayer.readyForDisplay) {
+			    strongSelf.posterView.image = image;
+		    }
+	    }];
+
+	[self setUpVideoControls];
 	[self startVideoLoad];
+}
+
+- (UILabel *)makeVideoTimeLabel {
+	UILabel *label = [[UILabel alloc] init];
+	label.translatesAutoresizingMaskIntoConstraints = NO;
+	label.textColor = UIColor.whiteColor;
+	label.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
+	return label;
+}
+
+- (UIButton *)makeVideoControlButton {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+	button.translatesAutoresizingMaskIntoConstraints = NO;
+	button.tintColor = UIColor.whiteColor;
+	return button;
+}
+
+- (void)setUpVideoControls {
+	UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+	bar.translatesAutoresizingMaskIntoConstraints = NO;
+	bar.layer.cornerRadius = 12;
+	bar.clipsToBounds = YES;
+	[self.view addSubview:bar];
+	self.videoControlsBar = bar;
+
+	self.playPauseButton = [self makeVideoControlButton];
+	[self.playPauseButton addTarget:self action:@selector(playPauseTapped) forControlEvents:UIControlEventTouchUpInside];
+	[bar.contentView addSubview:self.playPauseButton];
+
+	self.muteButton = [self makeVideoControlButton];
+	[self.muteButton addTarget:self action:@selector(muteTapped) forControlEvents:UIControlEventTouchUpInside];
+	[bar.contentView addSubview:self.muteButton];
+
+	self.elapsedLabel = [self makeVideoTimeLabel];
+	[bar.contentView addSubview:self.elapsedLabel];
+	self.remainingLabel = [self makeVideoTimeLabel];
+	[bar.contentView addSubview:self.remainingLabel];
+
+	self.videoSlider = [[UISlider alloc] init];
+	self.videoSlider.translatesAutoresizingMaskIntoConstraints = NO;
+	self.videoSlider.minimumTrackTintColor = UIColor.whiteColor;
+	self.videoSlider.maximumTrackTintColor = [UIColor.whiteColor colorWithAlphaComponent:0.3];
+	[self.videoSlider addTarget:self action:@selector(sliderTouchDown) forControlEvents:UIControlEventTouchDown];
+	[self.videoSlider addTarget:self action:@selector(sliderChanged) forControlEvents:UIControlEventValueChanged];
+	[self.videoSlider addTarget:self
+	                      action:@selector(sliderTouchUp)
+	            forControlEvents:(UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel)];
+	[bar.contentView addSubview:self.videoSlider];
+
+	[NSLayoutConstraint activateConstraints:@[
+		[bar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+		[bar.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+		[bar.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-58],
+		[bar.heightAnchor constraintEqualToConstant:44],
+
+		[self.playPauseButton.leadingAnchor constraintEqualToAnchor:bar.contentView.leadingAnchor constant:6],
+		[self.playPauseButton.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+		[self.playPauseButton.widthAnchor constraintEqualToConstant:32],
+		[self.playPauseButton.heightAnchor constraintEqualToAnchor:bar.contentView.heightAnchor],
+
+		[self.elapsedLabel.leadingAnchor constraintEqualToAnchor:self.playPauseButton.trailingAnchor constant:2],
+		[self.elapsedLabel.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+
+		[self.videoSlider.leadingAnchor constraintEqualToAnchor:self.elapsedLabel.trailingAnchor constant:8],
+		[self.videoSlider.trailingAnchor constraintEqualToAnchor:self.remainingLabel.leadingAnchor constant:-8],
+		[self.videoSlider.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+
+		[self.remainingLabel.trailingAnchor constraintEqualToAnchor:self.muteButton.leadingAnchor constant:-2],
+		[self.remainingLabel.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+
+		[self.muteButton.trailingAnchor constraintEqualToAnchor:bar.contentView.trailingAnchor constant:-6],
+		[self.muteButton.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+		[self.muteButton.widthAnchor constraintEqualToConstant:32],
+		[self.muteButton.heightAnchor constraintEqualToAnchor:bar.contentView.heightAnchor],
+	]];
+
+	[self updatePlayPauseButton];
+	[self updateMuteButton];
+	[self updateTimeLabelsForCurrent:0 duration:self.asset.durationMs / 1000.0];
 }
 
 - (void)startVideoLoad {
@@ -578,10 +715,172 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 - (void)attachPlayerWithPath:(NSString *)path {
 	[self.spinner stopAnimating];
 	self.errorLabel.hidden = YES;
-	self.playerViewController.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	self.videoFilePath = path;
+
+	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	self.player.muted = YES; 
+
+	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
+	self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
+	self.playerLayer.frame = self.view.bounds;
+	[self.view.layer insertSublayer:self.playerLayer above:self.posterView.layer];
+	[self.playerLayer addObserver:self
+	                    forKeyPath:@"readyForDisplay"
+	                       options:0
+	                       context:IMPlayerLayerReadyForDisplayContext];
+
+	__weak typeof(self) weakSelf = self;
+	self.timeObserverToken = [self.player addPeriodicTimeObserverForInterval:CMTimeMakeWithSeconds(0.25, 600)
+	                                                                    queue:dispatch_get_main_queue()
+	                                                               usingBlock:^(CMTime time) {
+		    [weakSelf updateVideoProgress];
+	    }];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+	                                          selector:@selector(playerDidPlayToEnd:)
+	                                              name:AVPlayerItemDidPlayToEndTimeNotification
+	                                            object:self.player.currentItem];
+
 	if (self.wantsAutoplay) {
-		[self.playerViewController.player play];
+		[self.player play];
 	}
+	[self updatePlayPauseButton];
+	[self updateVideoProgress];
+}
+
+- (void)observeValueForKeyPath:(nullable NSString *)keyPath
+                      ofObject:(nullable id)object
+                        change:(nullable NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(nullable void *)context {
+	if (context == IMPlayerLayerReadyForDisplayContext) {
+		__weak typeof(self) weakSelf = self;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			typeof(self) strongSelf = weakSelf;
+			if (strongSelf && strongSelf.playerLayer.readyForDisplay) {
+				strongSelf.posterView.hidden = YES;
+			}
+		});
+		return;
+	}
+	[super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+#pragma mark Video controls
+
+- (NSTimeInterval)videoDuration {
+	NSTimeInterval duration = CMTimeGetSeconds(self.player.currentItem.duration);
+	if (!isfinite(duration) || duration <= 0) {
+		duration = self.asset.durationMs / 1000.0;
+	}
+	return duration;
+}
+
+- (void)updateTimeLabelsForCurrent:(NSTimeInterval)current duration:(NSTimeInterval)duration {
+	self.elapsedLabel.text = IMTimeString(current);
+	self.remainingLabel.text = [@"-" stringByAppendingString:IMTimeString(MAX(0, duration - current))];
+}
+
+- (void)updateVideoProgress {
+	if (!self.player || self.scrubbing) {
+		return;
+	}
+	NSTimeInterval duration = [self videoDuration];
+	NSTimeInterval current = CMTimeGetSeconds(self.player.currentTime);
+	if (!isfinite(current) || current < 0) {
+		current = 0;
+	}
+	self.videoSlider.value = duration > 0 ? (float)(current / duration) : 0;
+	[self updateTimeLabelsForCurrent:current duration:duration];
+	[self updatePlayPauseButton];
+}
+
+- (void)updatePlayPauseButton {
+	BOOL playing = self.player.rate != 0;
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+		[self.playPauseButton setImage:[UIImage systemImageNamed:(playing ? @"pause.fill" : @"play.fill")
+		                                        withConfiguration:config]
+		                      forState:UIControlStateNormal];
+	}
+}
+
+- (void)updateMuteButton {
+	BOOL muted = self.player ? self.player.muted : YES;
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+		[self.muteButton setImage:[UIImage systemImageNamed:(muted ? @"speaker.slash.fill" : @"speaker.wave.2.fill")
+		                                   withConfiguration:config]
+		                 forState:UIControlStateNormal];
+	}
+}
+
+- (void)playPauseTapped {
+	if (!self.player) {
+		return;
+	}
+	if (self.player.rate != 0) {
+		self.wantsAutoplay = NO;
+		[self.player pause];
+	} else {
+		if (self.playbackReachedEnd) {
+			self.playbackReachedEnd = NO;
+			[self.player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+		}
+		[self.player play];
+	}
+	[self updatePlayPauseButton];
+}
+
+- (void)muteTapped {
+	if (!self.player) {
+		return;
+	}
+	BOOL nowMuted = !self.player.muted;
+	self.player.muted = nowMuted;
+	if (!nowMuted) {
+		Class sessionClass = NSClassFromString(@"AVAudioSession");
+		id session = ((id (*)(Class, SEL))objc_msgSend)(sessionClass, @selector(sharedInstance));
+		if (session) {
+			((BOOL (*)(id, SEL, NSString *, NSError **))objc_msgSend)(
+			    session, @selector(setCategory:error:), @"AVAudioSessionCategoryPlayback", NULL);
+			((BOOL (*)(id, SEL, BOOL, NSError **))objc_msgSend)(session, @selector(setActive:error:), YES, NULL);
+		}
+	}
+	[self updateMuteButton];
+}
+
+- (void)sliderTouchDown {
+	self.scrubbing = YES;
+	self.scrubbingWasPlaying = self.player.rate != 0;
+	[self.player pause];
+}
+
+- (void)sliderChanged {
+	NSTimeInterval duration = [self videoDuration];
+	NSTimeInterval target = self.videoSlider.value * duration;
+	[self updateTimeLabelsForCurrent:target duration:duration];
+	[self.player seekToTime:CMTimeMakeWithSeconds(target, 600)
+	         toleranceBefore:kCMTimePositiveInfinity
+	          toleranceAfter:kCMTimePositiveInfinity];
+}
+
+- (void)sliderTouchUp {
+	NSTimeInterval duration = [self videoDuration];
+	NSTimeInterval target = self.videoSlider.value * duration;
+	[self.player seekToTime:CMTimeMakeWithSeconds(target, 600)
+	         toleranceBefore:kCMTimeZero
+	          toleranceAfter:kCMTimeZero];
+	self.scrubbing = NO;
+	self.playbackReachedEnd = NO;
+	if (self.scrubbingWasPlaying) {
+		[self.player play];
+	}
+	[self updatePlayPauseButton];
+}
+
+- (void)playerDidPlayToEnd:(NSNotification *)note {
+	self.playbackReachedEnd = YES;
+	self.wantsAutoplay = NO;
+	[self updatePlayPauseButton];
 }
 
 - (void)playIfVideo {
@@ -589,12 +888,18 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 		return;
 	}
 	self.wantsAutoplay = YES; 
-	[self.playerViewController.player play];
+	if (self.playbackReachedEnd) {
+		self.playbackReachedEnd = NO;
+		[self.player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+	}
+	[self.player play];
+	[self updatePlayPauseButton];
 }
 
 - (void)pauseIfVideo {
 	self.wantsAutoplay = NO;
-	[self.playerViewController.player pause];
+	[self.player pause];
+	[self updatePlayPauseButton];
 }
 
 - (BOOL)canBeginDismissPan {
@@ -604,15 +909,259 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 	return self.scrollView.zoomScale <= self.scrollView.minimumZoomScale + 0.01;
 }
 
+#pragma mark Zoom-dismiss anchor
+
+- (nullable UIImageView *)transitionImageViewForDismissal {
+	if (self.asset.isImage) {
+		return self.imageView.image ? self.imageView : nil;
+	}
+	self.wantsAutoplay = NO;
+	[self.player pause];
+	UIImage *frame = [self currentVideoFrame] ?: self.posterView.image;
+	if (!frame) {
+		return nil; 
+	}
+	CGRect videoRect = self.playerLayer.readyForDisplay ? self.playerLayer.videoRect : CGRectZero;
+	CGRect anchor;
+	if (!CGRectIsEmpty(videoRect)) {
+		anchor = [self.view.layer convertRect:videoRect fromLayer:self.playerLayer];
+	} else {
+		CGFloat ratio = frame.size.height > 0 ? frame.size.width / frame.size.height : 1;
+		CGFloat width = self.view.bounds.size.width;
+		CGFloat height = ratio > 0 ? width / ratio : width;
+		if (height > self.view.bounds.size.height) {
+			height = self.view.bounds.size.height;
+			width = height * ratio;
+		}
+		anchor = CGRectMake((self.view.bounds.size.width - width) / 2,
+		                    (self.view.bounds.size.height - height) / 2, width, height);
+	}
+	self.posterView.image = frame;
+	self.posterView.frame = anchor; 
+	self.posterView.hidden = NO;
+	self.playerLayer.hidden = YES; 
+	return self.posterView;
+}
+
+- (nullable UIImage *)currentVideoFrame {
+	if (!self.videoFilePath || !self.player) {
+		return nil;
+	}
+	AVURLAsset *avAsset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:self.videoFilePath] options:nil];
+	AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:avAsset];
+	generator.appliesPreferredTrackTransform = YES;
+	generator.requestedTimeToleranceBefore = CMTimeMakeWithSeconds(1.0, 600);
+	generator.requestedTimeToleranceAfter = CMTimeMakeWithSeconds(1.0, 600);
+	CGImageRef cgImage = [generator copyCGImageAtTime:self.player.currentTime actualTime:NULL error:NULL];
+	if (!cgImage) {
+		return nil;
+	}
+	UIImage *image = [UIImage imageWithCGImage:cgImage];
+	CGImageRelease(cgImage);
+	return image;
+}
+
+#pragma mark Live Photo
+
+- (void)stageLivePairImageData:(NSData *)data {
+	if (!self.asset.livePhotoVideoId || self.livePairImagePath) {
+		return;
+	}
+	const uint8_t *bytes = data.bytes;
+	BOOL isJpeg = data.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8;
+	NSString *name = [NSString stringWithFormat:@"%@.%@", self.asset.assetId, isJpeg ? @"jpg" : @"heic"];
+	NSString *path = [IMLivePairDirectory() stringByAppendingPathComponent:name];
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+		[[NSFileManager defaultManager] createDirectoryAtPath:IMLivePairDirectory()
+		                          withIntermediateDirectories:YES
+		                                           attributes:nil
+		                                                error:NULL];
+		BOOL wrote = [data writeToFile:path atomically:YES];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || !wrote) {
+				return;
+			}
+			strongSelf.livePairImagePath = path;
+			[strongSelf requestLivePhotoIfPaired];
+		});
+	});
+	[self fetchLivePairVideo];
+}
+
+- (void)fetchLivePairVideo {
+	if (self.liveVideoTask || self.livePairVideoPath) {
+		return;
+	}
+	NSString *liveVideoId = self.asset.livePhotoVideoId;
+	NSString *path = [IMLivePairDirectory() stringByAppendingPathComponent:
+	                                            [liveVideoId stringByAppendingPathExtension:@"mov"]];
+	if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+		self.livePairVideoPath = path;
+		[self requestLivePhotoIfPaired];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	self.liveVideoTask = [IMAssetApi videoPlaybackDataForAssetId:liveVideoId
+	                                                  completion:^(NSData *_Nullable data, NSError *_Nullable error) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || !data) {
+			    return;
+		    }
+		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+			    [[NSFileManager defaultManager] createDirectoryAtPath:IMLivePairDirectory()
+			                              withIntermediateDirectories:YES
+			                                               attributes:nil
+			                                                    error:NULL];
+			    BOOL wrote = [data writeToFile:path atomically:YES];
+			    dispatch_async(dispatch_get_main_queue(), ^{
+				    typeof(self) innerSelf = weakSelf;
+				    if (!innerSelf || !wrote) {
+					    return;
+				    }
+				    innerSelf.livePairVideoPath = path;
+				    [innerSelf requestLivePhotoIfPaired];
+			    });
+		    });
+	    }];
+}
+
+- (void)requestLivePhotoIfPaired {
+	if (!self.livePairImagePath || !self.livePairVideoPath || self.livePhoto ||
+	    self.livePhotoRequestId != PHLivePhotoRequestIDInvalid) {
+		return;
+	}
+	NSArray<NSURL *> *urls = @[
+		[NSURL fileURLWithPath:self.livePairImagePath],
+		[NSURL fileURLWithPath:self.livePairVideoPath],
+	];
+	__weak typeof(self) weakSelf = self;
+	self.livePhotoRequestId =
+	    [PHLivePhoto requestLivePhotoWithResourceFileURLs:urls
+	                                     placeholderImage:self.imageView.image
+	                                           targetSize:CGSizeZero
+	                                          contentMode:PHImageContentModeAspectFit
+	                                        resultHandler:^(PHLivePhoto *_Nullable livePhoto, NSDictionary *_Nullable info) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || !livePhoto) {
+			    return;
+		    }
+		    strongSelf.livePhoto = livePhoto;
+		    [strongSelf showLiveBadge];
+	    }];
+}
+
+- (void)showLiveBadge {
+	if (self.liveBadgeView) {
+		return;
+	}
+	UIVisualEffectView *badge = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+	badge.translatesAutoresizingMaskIntoConstraints = NO;
+	badge.layer.cornerRadius = 12;
+	badge.clipsToBounds = YES;
+	[self.view addSubview:badge];
+	self.liveBadgeView = badge;
+
+	UIImageView *icon = [[UIImageView alloc] init];
+	icon.translatesAutoresizingMaskIntoConstraints = NO;
+	icon.tintColor = UIColor.whiteColor;
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold];
+		icon.image = [UIImage systemImageNamed:@"livephoto" withConfiguration:config];
+	}
+	[badge.contentView addSubview:icon];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.translatesAutoresizingMaskIntoConstraints = NO;
+	label.text = _(@"LIVE");
+	label.textColor = UIColor.whiteColor;
+	label.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+	[badge.contentView addSubview:label];
+
+	[NSLayoutConstraint activateConstraints:@[
+		[badge.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+		[badge.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:52],
+		[badge.heightAnchor constraintEqualToConstant:24],
+
+		[icon.leadingAnchor constraintEqualToAnchor:badge.contentView.leadingAnchor constant:8],
+		[icon.centerYAnchor constraintEqualToAnchor:badge.contentView.centerYAnchor],
+		[label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:4],
+		[label.trailingAnchor constraintEqualToAnchor:badge.contentView.trailingAnchor constant:-8],
+		[label.centerYAnchor constraintEqualToAnchor:badge.contentView.centerYAnchor],
+	]];
+
+	UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+	                                                                                    action:@selector(handleLivePhotoPress:)];
+	press.minimumPressDuration = 0.3;
+	[self.view addGestureRecognizer:press];
+}
+
+- (void)handleLivePhotoPress:(UILongPressGestureRecognizer *)press {
+	if (!self.livePhoto) {
+		return;
+	}
+	if (press.state == UIGestureRecognizerStateBegan) {
+		if (!self.livePhotoView) {
+			self.livePhotoView = [[PHLivePhotoView alloc] init];
+			self.livePhotoView.delegate = self;
+			self.livePhotoView.contentMode = UIViewContentModeScaleAspectFit;
+			self.livePhotoView.userInteractionEnabled = NO;
+		}
+		self.livePhotoView.livePhoto = self.livePhoto;
+		self.livePhotoView.frame = self.imageView.bounds; 
+		[self.imageView addSubview:self.livePhotoView];
+		[self.livePhotoView startPlaybackWithStyle:PHLivePhotoViewPlaybackStyleFull];
+	} else if (press.state == UIGestureRecognizerStateEnded || press.state == UIGestureRecognizerStateCancelled ||
+	           press.state == UIGestureRecognizerStateFailed) {
+		[self.livePhotoView stopPlayback];
+	}
+}
+
+- (void)livePhotoView:(PHLivePhotoView *)livePhotoView didEndPlaybackWithStyle:(PHLivePhotoViewPlaybackStyle)playbackStyle {
+	[livePhotoView removeFromSuperview];
+}
+
 - (void)dealloc {
-	[self.loadTask cancel];
+	[_loadTask cancel];
+	[_liveVideoTask cancel];
+	if (_timeObserverToken) {
+		[_player removeTimeObserver:_timeObserverToken];
+	}
+	if (_playerLayer) {
+		[_playerLayer removeObserver:self forKeyPath:@"readyForDisplay" context:IMPlayerLayerReadyForDisplayContext];
+	}
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	if (_livePhotoRequestId != PHLivePhotoRequestIDInvalid) {
+		[PHLivePhoto cancelLivePhotoRequestWithRequestID:_livePhotoRequestId];
+	}
 }
 
 @end
 
 #pragma mark - AssetViewController
 
-@interface AssetViewController () <UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate>
+static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double ratio) {
+	if (!thumb || ratio <= 0 || thumb.size.width <= 0 || thumb.size.height <= 0) {
+		return thumb;
+	}
+	CGFloat area = thumb.size.width * thumb.size.height;
+	CGSize canvas = CGSizeMake(sqrt(area * ratio), sqrt(area / ratio));
+	CGFloat fillScale = MAX(canvas.width / thumb.size.width, canvas.height / thumb.size.height);
+	CGRect drawRect = CGRectMake((canvas.width - thumb.size.width * fillScale) / 2,
+	                             (canvas.height - thumb.size.height * fillScale) / 2,
+	                             thumb.size.width * fillScale,
+	                             thumb.size.height * fillScale);
+	UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+	format.opaque = YES;
+	format.scale = 1;
+	UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvas format:format];
+	return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+		[thumb drawInRect:drawRect];
+	}];
+}
+
+@interface AssetViewController () <UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate, UIViewControllerTransitioningDelegate>
 @property (nonatomic, strong) NSArray<IMAsset *> *assets;
 @property (nonatomic) NSInteger currentIndex;
 @property (nonatomic, strong) UIPageViewController *pageViewController;
@@ -635,7 +1184,30 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 	vc.favoriteOverrides = [NSMutableDictionary dictionary];
 	vc.modalPresentationStyle = UIModalPresentationFullScreen;
 	vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+	vc.transitioningDelegate = vc;
 	return vc;
+}
+
+#pragma mark Zoom transition plumbing
+
+- (IMAsset *)currentAsset {
+	return self.assets[self.currentIndex];
+}
+
+- (nullable UIImageView *)currentPageImageView {
+	AssetPageContentViewController *current =
+	    (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
+	return [current transitionImageViewForDismissal];
+}
+
+- (nullable id<UIViewControllerAnimatedTransitioning>)animationControllerForPresentedController:(UIViewController *)presented
+                                                                            presentingController:(UIViewController *)presenting
+                                                                                sourceController:(UIViewController *)source {
+	return self.zoomSource ? [IMZoomTransition transitionPresenting:YES] : nil;
+}
+
+- (nullable id<UIViewControllerAnimatedTransitioning>)animationControllerForDismissedController:(UIViewController *)dismissed {
+	return self.zoomSource ? [IMZoomTransition transitionPresenting:NO] : nil;
 }
 
 + (void)pruneVideoCache {
@@ -643,13 +1215,14 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 	dispatch_once(&onceToken, ^{
 		dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
 			NSFileManager *fileManager = [NSFileManager defaultManager];
-			NSString *directory = IMVideoCacheDirectory();
 			NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-3 * 24 * 60 * 60];
-			for (NSString *name in [fileManager contentsOfDirectoryAtPath:directory error:NULL]) {
-				NSString *path = [directory stringByAppendingPathComponent:name];
-				NSDate *modified = [fileManager attributesOfItemAtPath:path error:NULL][NSFileModificationDate];
-				if (modified && [modified compare:cutoff] == NSOrderedAscending) {
-					[fileManager removeItemAtPath:path error:NULL];
+			for (NSString *directory in @[ IMVideoCacheDirectory(), IMLivePairDirectory() ]) {
+				for (NSString *name in [fileManager contentsOfDirectoryAtPath:directory error:NULL]) {
+					NSString *path = [directory stringByAppendingPathComponent:name];
+					NSDate *modified = [fileManager attributesOfItemAtPath:path error:NULL][NSFileModificationDate];
+					if (modified && [modified compare:cutoff] == NSOrderedAscending) {
+						[fileManager removeItemAtPath:path error:NULL];
+					}
 				}
 			}
 		});
@@ -678,6 +1251,9 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 	[self.pageViewController didMoveToParentViewController:self];
 
 	AssetPageContentViewController *first = [self pageForIndex:self.currentIndex];
+	IMAsset *startAsset = self.assets[self.currentIndex];
+	UIImage *gridThumb = [self.zoomSource zoomTransitionImageViewForAssetId:startAsset.assetId].image;
+	first.placeholderImage = IMThumbRedrawnToRatio(gridThumb, startAsset.ratio);
 	__weak typeof(self) weakSelf = self;
 	[self.pageViewController setViewControllers:@[ first ]
 	                                    direction:UIPageViewControllerNavigationDirectionForward

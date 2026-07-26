@@ -54,6 +54,7 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 	[self exec:@"CREATE INDEX IF NOT EXISTS idx_assets_bucket ON assets(timeBucket, position)"];
 	[self exec:@"ALTER TABLE assets ADD COLUMN city TEXT"];
 	[self exec:@"ALTER TABLE assets ADD COLUMN country TEXT"];
+	[self exec:@"ALTER TABLE assets ADD COLUMN livePhotoVideoId TEXT"];
 	[self exec:@"CREATE TABLE IF NOT EXISTS sync_state ("
 	            "  deviceAssetId TEXT PRIMARY KEY,"
 	            "  assetId TEXT,"
@@ -120,8 +121,8 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_prepare_v2(self.db,
-	                    "INSERT INTO assets (id, timeBucket, position, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country) "
-	                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	                    "INSERT INTO assets (id, timeBucket, position, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country, livePhotoVideoId) "
+	                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	                    -1, &stmt, NULL);
 	for (NSUInteger i = 0; i < assets.count; i++) {
 		IMAsset *asset = assets[i];
@@ -143,6 +144,11 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		} else {
 			sqlite3_bind_null(stmt, 10);
 		}
+		if (asset.livePhotoVideoId) {
+			sqlite3_bind_text(stmt, 11, [asset.livePhotoVideoId UTF8String], -1, SQLITE_TRANSIENT);
+		} else {
+			sqlite3_bind_null(stmt, 11);
+		}
 		if (sqlite3_step(stmt) != SQLITE_DONE) {
 			NSLog(@"IMDatabase: insert asset failed: %s", sqlite3_errmsg(self.db));
 		}
@@ -157,7 +163,7 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_prepare_v2(self.db,
-	                    "SELECT id, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country "
+	                    "SELECT id, fileCreatedAt, isFavorite, isImage, durationMs, ratio, city, country, livePhotoVideoId "
 	                    "FROM assets WHERE timeBucket = ? ORDER BY position ASC",
 	                    -1, &stmt, NULL);
 	sqlite3_bind_text(stmt, 1, [timeBucket UTF8String], -1, SQLITE_TRANSIENT);
@@ -173,6 +179,8 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		NSString *city = cityC ? [NSString stringWithUTF8String:cityC] : nil;
 		const char *countryC = (const char *)sqlite3_column_text(stmt, 7);
 		NSString *country = countryC ? [NSString stringWithUTF8String:countryC] : nil;
+		const char *liveC = (const char *)sqlite3_column_text(stmt, 8);
+		NSString *livePhotoVideoId = liveC ? [NSString stringWithUTF8String:liveC] : nil;
 		[assets addObject:[IMAsset assetWithId:assetId
 		                          fileCreatedAt:fileCreatedAt
 		                               favorite:isFavorite
@@ -180,7 +188,8 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		                             durationMs:durationMs
 		                                  ratio:ratio
 		                                   city:city
-		                                country:country]];
+		                                country:country
+		                       livePhotoVideoId:livePhotoVideoId]];
 	}
 	sqlite3_finalize(stmt);
 
