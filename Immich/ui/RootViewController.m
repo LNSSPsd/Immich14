@@ -17,8 +17,17 @@
 	[super viewDidLoad];
 
 	NSArray<NSString *> *titles = @[ _(@"Timeline"), _(@"Search"), _(@"Albums"), _(@"Sync"), _(@"Settings") ];
-	NSArray<NSString *> *symbols =
-	    @[ @"photo.on.rectangle", @"magnifyingglass", @"rectangle.stack", @"arrow.triangle.2.circlepath", @"gearshape" ];
+	BOOL sfSymbols2;
+	if (@available(iOS 14.0, *)) {
+		sfSymbols2 = YES;
+	} else {
+		sfSymbols2 = NO;
+	}
+	NSArray<NSString *> *symbols = @[
+		@"photo.on.rectangle", @"magnifyingglass", @"rectangle.stack",
+		sfSymbols2 ? @"arrow.triangle.2.circlepath" : @"arrow.2.circlepath",
+		sfSymbols2 ? @"gearshape" : @"gear"
+	];
 
 	NSMutableArray<UIViewController *> *tabs = [NSMutableArray array];
 	[titles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger i, BOOL *stop) {

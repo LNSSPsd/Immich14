@@ -136,15 +136,16 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 				[[NSFileManager defaultManager] setAttributes:@{ NSFileModificationDate: [NSDate date] }
 				                                  ofItemAtPath:path
 				                                         error:nil];
+				if (!task.cancelled) {
+					dispatch_async(dispatch_get_main_queue(), ^{
+						if (!task.cancelled) {
+							completion(diskImage);
+						}
+					});
+				}
+				return;
 			}
-			if (!task.cancelled) {
-				dispatch_async(dispatch_get_main_queue(), ^{
-					if (!task.cancelled) {
-						completion(diskImage);
-					}
-				});
-			}
-			return;
+			[[NSFileManager defaultManager] removeItemAtPath:path error:nil];
 		}
 
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -165,8 +166,37 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 					    UIImage *netImage = [UIImage imageWithData:data];
 					    if (netImage) {
 						    [weakSelf.memoryCache setObject:netImage forKey:key cost:IMDecodedByteCost(netImage)];
+						    [data writeToFile:path atomically:YES];
+					    } else if ([size isEqualToString:IMAssetMediaSizeThumbnail]) {
+						    dispatch_async(dispatch_get_main_queue(), ^{
+							    if (task.cancelled) {
+								    return;
+							    }
+							    task.networkTask = [IMAssetApi thumbnailDataForAssetId:assetId
+							                                                        size:IMAssetMediaSizePreview
+							                                                  completion:^(NSData *_Nullable fallbackData, NSError *_Nullable fallbackError) {
+								    if (task.cancelled || !fallbackData) {
+									    completion(nil);
+									    return;
+								    }
+								    dispatch_async(weakSelf.ioQueue, ^{
+									    UIImage *fallbackImage = [UIImage imageWithData:fallbackData];
+									    if (fallbackImage) {
+										    [weakSelf.memoryCache setObject:fallbackImage forKey:key cost:IMDecodedByteCost(fallbackImage)];
+										    [fallbackData writeToFile:path atomically:YES];
+									    }
+									    if (!task.cancelled) {
+										    dispatch_async(dispatch_get_main_queue(), ^{
+											    if (!task.cancelled) {
+												    completion(fallbackImage);
+											    }
+										    });
+									    }
+								    });
+							    }];
+						    });
+						    return;
 					    }
-					    [data writeToFile:path atomically:YES];
 					    typeof(self) cache = weakSelf;
 					    if (cache) {
 						    cache.writesSinceTrim += 1;

@@ -7,6 +7,13 @@
 #import "common.h"
 #import <Photos/Photos.h>
 
+static PHAuthorizationStatus IMPhotoReadWriteAuthStatus(void) {
+	if (@available(iOS 14.0, *)) {
+		return IMPhotoReadWriteAuthStatus();
+	}
+	return [PHPhotoLibrary authorizationStatus];
+}
+
 typedef NS_ENUM(NSInteger, IMSyncSection) {
 	IMSyncSectionBackup = 0,
 	IMSyncSectionLibrary,
@@ -63,7 +70,7 @@ static NSString *const kActionCellId = @"action";
 		[self.tableView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 	]];
 
-	self.authStatus = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+	self.authStatus = IMPhotoReadWriteAuthStatus();
 	self.totalCount = [[IMPhotoLibrary shared] totalAssetCount];
 	[[NSNotificationCenter defaultCenter] addObserver:self
 	                                          selector:@selector(syncProgressed)
@@ -98,7 +105,7 @@ static NSString *const kActionCellId = @"action";
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
-	self.authStatus = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+	self.authStatus = IMPhotoReadWriteAuthStatus();
 	self.totalCount = [[IMPhotoLibrary shared] totalAssetCount];
 	[self reloadCounts];
 }
@@ -129,7 +136,7 @@ static NSString *const kActionCellId = @"action";
 			if (!strongSelf) {
 				return;
 			}
-			strongSelf.authStatus = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+			strongSelf.authStatus = IMPhotoReadWriteAuthStatus();
 			strongSelf.totalCount = [[IMPhotoLibrary shared] totalAssetCount];
 			[strongSelf.tableView reloadData];
 		}];

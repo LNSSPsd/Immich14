@@ -13,13 +13,20 @@
 }
 
 - (void)requestAuthorizationWithCompletion:(void (^)(BOOL granted))completion {
-	[PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
-	                                            handler:^(PHAuthorizationStatus status) {
-		    BOOL granted = (status == PHAuthorizationStatusAuthorized || status == PHAuthorizationStatusLimited);
-		    dispatch_async(dispatch_get_main_queue(), ^{
-			    completion(granted);
-		    });
-	    }];
+	void (^handler)(PHAuthorizationStatus) = ^(PHAuthorizationStatus status) {
+		BOOL granted = (status == PHAuthorizationStatusAuthorized);
+		if (@available(iOS 14.0, *)) {
+			granted = granted || (status == PHAuthorizationStatusLimited);
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(granted);
+		});
+	};
+	if (@available(iOS 14.0, *)) {
+		[PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:handler];
+	} else {
+		[PHPhotoLibrary requestAuthorization:handler];
+	}
 }
 
 - (NSInteger)totalAssetCount {

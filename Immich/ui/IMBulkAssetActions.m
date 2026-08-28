@@ -85,39 +85,47 @@ presentingController:(UIViewController *)presenter
   presentingController:(UIViewController *)presenter
              completion:(void (^)(void))completion {
 	__weak UIViewController *weakPresenter = presenter;
-	[PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly
-	                                            handler:^(PHAuthorizationStatus status) {
-		    dispatch_async(dispatch_get_main_queue(), ^{
-			    UIViewController *strongPresenter = weakPresenter;
-			    if (!strongPresenter) {
-				    return;
-			    }
-			    if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited) {
-				    [self showErrorAlertWithTitle:_(@"No Photos Access")
-				                            message:_(@"Allow photo library access in Settings to save downloads.")
-				                  presentingController:strongPresenter];
-				    completion();
-				    return;
-			    }
-			    __block BOOL cancelled = NO;
-			    UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Downloading")
-			                                                                     message:@""
-			                                                              preferredStyle:UIAlertControllerStyleAlert];
-			    [alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel")
-			                                               style:UIAlertActionStyleCancel
-			                                             handler:^(UIAlertAction *_Nonnull action) {
-				    cancelled = YES;
-			    }]];
-			    [strongPresenter presentViewController:alert animated:YES completion:nil];
-			    [self downloadNext:assets
-			                 index:0
-			              failures:0
-			                 alert:alert
-			           isCancelled:^BOOL { return cancelled; }
-			  presentingController:strongPresenter
-			            completion:completion];
-		    });
-	    }];
+	void (^handler)(PHAuthorizationStatus) = ^(PHAuthorizationStatus status) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIViewController *strongPresenter = weakPresenter;
+			if (!strongPresenter) {
+				return;
+			}
+			BOOL authorized = (status == PHAuthorizationStatusAuthorized);
+			if (@available(iOS 14.0, *)) {
+				authorized = authorized || (status == PHAuthorizationStatusLimited);
+			}
+			if (!authorized) {
+				[self showErrorAlertWithTitle:_(@"No Photos Access")
+				                        message:_(@"Allow photo library access in Settings to save downloads.")
+				              presentingController:strongPresenter];
+				completion();
+				return;
+			}
+			__block BOOL cancelled = NO;
+			UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Downloading")
+			                                                                 message:@""
+			                                                          preferredStyle:UIAlertControllerStyleAlert];
+			[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel")
+			                                           style:UIAlertActionStyleCancel
+			                                         handler:^(UIAlertAction *_Nonnull action) {
+				cancelled = YES;
+			}]];
+			[strongPresenter presentViewController:alert animated:YES completion:nil];
+			[self downloadNext:assets
+			             index:0
+			          failures:0
+			             alert:alert
+			       isCancelled:^BOOL { return cancelled; }
+			presentingController:strongPresenter
+			          completion:completion];
+		});
+	};
+	if (@available(iOS 14.0, *)) {
+		[PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly handler:handler];
+	} else {
+		[PHPhotoLibrary requestAuthorization:handler];
+	}
 }
 
 + (void)downloadNext:(NSArray<IMAsset *> *)assets

@@ -6,7 +6,7 @@ DISPLAY_NAME := Immich 14
 BUNDLE_ID    := com.lns.immich-ios-14
 APP_VERSION  := $(shell cat ../VERSION)
 
-IPHONEOS_DEPLOYMENT_TARGET := 14.0
+IPHONEOS_DEPLOYMENT_TARGET := 13.0
 export IPHONEOS_DEPLOYMENT_TARGET
 
 THEOS ?= ~/theos
@@ -68,14 +68,24 @@ endif
 APP_DIR := build/Payload/$(APP_NAME).app
 BIN     := $(APP_DIR)/$(APP_NAME)
 
-SOURCES := $(wildcard *.m *.c */*.m */*.c)
-OBJECTS := $(addprefix build/objects/,$(addsuffix .o,$(SOURCES)))
+SOURCES  := $(wildcard *.m *.c */*.m */*.c)
+ASM_SRCS := $(wildcard *.S */*.S)
+OBJECTS  := $(addprefix build/objects/,$(addsuffix .o,$(SOURCES))) \
+            $(addprefix build/objects/,$(addsuffix .o,$(ASM_SRCS)))
+
+SRC_OBJS := $(addprefix build/objects/,$(addsuffix .o,$(SOURCES)))
+ASM_OBJS := $(addprefix build/objects/,$(addsuffix .o,$(ASM_SRCS)))
 
 all: build/$(APP_NAME).ipa
 
-$(OBJECTS): build/objects/%.o: %
+$(SRC_OBJS): build/objects/%.o: %
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+ASFLAGS := -target arm64-apple-ios$(IPHONEOS_DEPLOYMENT_TARGET) -isysroot $(SDKROOT)
+$(ASM_OBJS): build/objects/%.o: %
+	@mkdir -p $(@D)
+	$(CC) $(ASFLAGS) -c $< -o $@
 
 -include $(OBJECTS:.o=.d)
 
