@@ -95,6 +95,7 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval);
 #if IM_TROLLSTORE
 static volatile sig_atomic_t gDaemonStopRequested = 0;
 static pid_t gSpawnedDaemonPID = 0;
+static int gDaemonRunFD = -1;
 static NSString *const kDaemonRunFileName = @"immich-backup-daemon.run";
 
 static NSString *IMDaemonRunFilePath(void) {
@@ -108,8 +109,15 @@ static void IMDaemonSignalHandler(int signalNumber) {
 
 static void IMRemoveDaemonRunFile(void) {
 	NSString *path = IMDaemonRunFilePath();
-	if (path.length > 0) {
-		unlink(path.fileSystemRepresentation);
+	if (gDaemonRunFD >= 0) {
+		if (path.length > 0) {
+			(void)unlink(path.fileSystemRepresentation);
+		}
+		(void)flock(gDaemonRunFD, LOCK_UN);
+		close(gDaemonRunFD);
+		gDaemonRunFD = -1;
+	} else if (path.length > 0) {
+		(void)unlink(path.fileSystemRepresentation);
 	}
 }
 
@@ -128,33 +136,75 @@ static pid_t IMReadDaemonPID(void) {
 	return bytes == sizeof(pid) && pid > 0 ? pid : 0;
 }
 
+static BOOL IMDaemonMarkerIsLocked(void) {
+	NSString *path = IMDaemonRunFilePath();
+	if (path.length == 0) {
+		return NO;
+	}
+	int fd = open(path.fileSystemRepresentation, O_RDWR);
+	if (fd < 0) {
+		return NO;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+		(void)flock(fd, LOCK_UN);
+		close(fd);
+		return NO;
+	}
+	int lockError = errno;
+	close(fd);
+	return lockError == EWOULDBLOCK || lockError == EAGAIN;
+}
+
+static BOOL IMRemoveStaleDaemonRunFile(void) {
+	NSString *path = IMDaemonRunFilePath();
+	if (path.length == 0) {
+		return YES;
+	}
+	int fd = open(path.fileSystemRepresentation, O_RDWR);
+	if (fd < 0) {
+		return errno == ENOENT;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		close(fd);
+		return NO;
+	}
+	(void)unlink(path.fileSystemRepresentation);
+	(void)flock(fd, LOCK_UN);
+	close(fd);
+	return YES;
+}
+
 static BOOL IMWriteDaemonPIDFile(void) {
 	NSString *path = IMDaemonRunFilePath();
-	int fd = open(path.fileSystemRepresentation, O_RDWR | O_CREAT | O_EXCL, 0600);
-	if (fd < 0 && errno == EEXIST) {
-		int oldFD = open(path.fileSystemRepresentation, O_RDONLY);
-		pid_t oldPID = 0;
-		ssize_t bytes = oldFD >= 0 ? read(oldFD, &oldPID, sizeof(oldPID)) : -1;
-		if (oldFD >= 0) {
-			close(oldFD);
-		}
-		if (bytes == sizeof(oldPID) && oldPID > 0) {
-			int probe = kill(oldPID, 0);
-			if (probe == 0 || errno == EPERM) {
-			NSLog(@"IMBackupDaemon: daemon already running (PID %d)", oldPID);
-			return NO;
-			}
-		}
-		unlink(path.fileSystemRepresentation);
-		fd = open(path.fileSystemRepresentation, O_RDWR | O_CREAT | O_EXCL, 0600);
-	}
+	int fd = open(path.fileSystemRepresentation, O_RDWR | O_CREAT, 0600);
 	if (fd < 0) {
 		NSLog(@"IMBackupDaemon: cannot create run marker %@ (%s)", path, strerror(errno));
 		return NO;
 	}
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		int lockError = errno;
+		pid_t oldPID = 0;
+		if (lockError == EWOULDBLOCK || lockError == EAGAIN) {
+			(void)lseek(fd, 0, SEEK_SET);
+			(void)read(fd, &oldPID, sizeof(oldPID));
+			NSLog(@"IMBackupDaemon: daemon already running%@", oldPID > 0 ? [NSString stringWithFormat:@" (PID %d)", oldPID] : @"");
+		} else {
+			NSLog(@"IMBackupDaemon: cannot lock run marker %@ (%s)", path, strerror(lockError));
+		}
+		close(fd);
+		return NO;
+	}
 	pid_t pid = getpid();
-	(void)write(fd, &pid, sizeof(pid));
-	close(fd);
+	if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) < 0 || write(fd, &pid, sizeof(pid)) != sizeof(pid)) {
+		int writeError = errno;
+		(void)flock(fd, LOCK_UN);
+		close(fd);
+		(void)unlink(path.fileSystemRepresentation);
+		NSLog(@"IMBackupDaemon: cannot write run marker %@ (%s)", path, strerror(writeError));
+		return NO;
+	}
+	(void)fsync(fd);
+	gDaemonRunFD = fd;
 	atexit(IMRemoveDaemonRunFile);
 	return YES;
 }
@@ -751,10 +801,14 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 	if (gRunningAsDaemonProcess || !IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) {
 		return;
 	}
-	pid_t knownPID = gSpawnedDaemonPID > 0 ? gSpawnedDaemonPID : IMReadDaemonPID();
-	if (knownPID > 0 && knownPID != getpid() &&
-	    (kill(knownPID, 0) == 0 || errno == EPERM)) {
-		gSpawnedDaemonPID = knownPID;
+	pid_t knownPID = IMReadDaemonPID();
+	if (IMDaemonMarkerIsLocked()) {
+		if (knownPID > 0 && knownPID != getpid()) {
+			gSpawnedDaemonPID = knownPID;
+		}
+		return;
+	}
+	if (!IMRemoveStaleDaemonRunFile()) {
 		return;
 	}
 	char executable[PATH_MAX];
@@ -766,6 +820,9 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 	NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
 	                                                         NSUserDomainMask,
 	                                                         YES).firstObject;
+	if (support.length == 0) {
+		support = NSTemporaryDirectory();
+	}
 	if (support.length > 0) {
 		(void)setenv("IM_BACKUP_SUPPORT_PATH", support.fileSystemRepresentation, 1);
 	}
@@ -818,13 +875,14 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 }
 
 - (void)stopPrivilegedDaemon {
-	pid_t pid = gSpawnedDaemonPID > 0 ? gSpawnedDaemonPID : IMReadDaemonPID();
-	if (pid > 0 && pid != getpid()) {
-		if (kill(pid, 0) == 0 || errno == EPERM) {
-			(void)kill(pid, SIGTERM);
-		} else if (errno == ESRCH) {
-			IMRemoveDaemonRunFile();
+	BOOL markerLocked = IMDaemonMarkerIsLocked();
+	pid_t pid = IMReadDaemonPID();
+	if (markerLocked && pid > 0 && pid != getpid()) {
+		if (kill(pid, SIGTERM) != 0 && errno == ESRCH) {
+			(void)IMRemoveStaleDaemonRunFile();
 		}
+	} else if (!markerLocked) {
+		(void)IMRemoveStaleDaemonRunFile();
 	}
 	gSpawnedDaemonPID = 0;
 }
