@@ -1,6 +1,11 @@
 #import "IMDatabase.h"
 #import <sqlite3.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChangeNotification";
 
@@ -58,6 +63,24 @@ static NSString *IMDatabaseSupportDirectory(void) {
 	sqlite3_busy_timeout(self.db, 3000);
 	[self exec:@"PRAGMA journal_mode=WAL"];
 	[self exec:@"PRAGMA synchronous=NORMAL"];
+	NSString *schemaLockPath = [support stringByAppendingPathComponent:@"immich.sqlite.schema.lock"];
+	int schemaLockFD = open(schemaLockPath.fileSystemRepresentation, O_CREAT | O_RDWR, 0600);
+	BOOL schemaLocked = NO;
+	if (schemaLockFD >= 0) {
+		int lockResult;
+		do {
+			lockResult = flock(schemaLockFD, LOCK_EX);
+		} while (lockResult != 0 && errno == EINTR);
+		schemaLocked = lockResult == 0;
+		if (!schemaLocked) {
+			int lockError = errno;
+			NSLog(@"IMDatabase: cannot lock schema %@ (%s)", schemaLockPath, strerror(lockError));
+			close(schemaLockFD);
+			schemaLockFD = -1;
+		}
+	} else {
+		NSLog(@"IMDatabase: cannot open schema lock %@ (%s)", schemaLockPath, strerror(errno));
+	}
 
 	[self exec:@"CREATE TABLE IF NOT EXISTS buckets ("
 	            "  timeBucket TEXT PRIMARY KEY,"
@@ -84,6 +107,10 @@ static NSString *IMDatabaseSupportDirectory(void) {
 	            "  state INTEGER NOT NULL"
 	            ")"];
 	[self exec:@"CREATE INDEX IF NOT EXISTS idx_sync_state_state ON sync_state(state)"];
+	if (schemaLocked) {
+		(void)flock(schemaLockFD, LOCK_UN);
+		close(schemaLockFD);
+	}
 }
 
 - (void)addColumnIfMissing:(NSString *)column type:(NSString *)type table:(NSString *)table {
