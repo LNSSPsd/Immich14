@@ -151,9 +151,7 @@ static BOOL IMAdminUsersResponseIsValid(NSArray *values) {
 		return NO;
 	}
 	for (id value in values) {
-		if (![value isKindOfClass:[NSDictionary class]] ||
-		    ![value[@"id"] isKindOfClass:[NSString class]] ||
-		    [value[@"id"] length] == 0) {
+		if (![IMAdminUser userWithResponseDictionary:value]) {
 			return NO;
 		}
 	}
@@ -177,9 +175,7 @@ static BOOL IMAdminSessionResponseIsValid(id value) {
 }
 
 static IMAdminUser *IMAdminParseUser(id json) {
-	if (![json isKindOfClass:[NSDictionary class]]) return nil;
-	IMAdminUser *user = [[IMAdminUser alloc] initWithDictionary:json];
-	return user.userId.length > 0 ? user : nil;
+	return [IMAdminUser userWithResponseDictionary:json];
 }
 
 @implementation IMAdminApi
