@@ -5,10 +5,14 @@ static NSString *const kKeyWifiOnlyUpload = @"IMPrefsWifiOnlyUpload";
 static NSString *const kKeyThumbnailQuality = @"IMPrefsThumbnailQuality";
 static NSString *const kKeyAllowInsecureTLS = @"IMPrefsAllowInsecureTLS";
 static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
+static NSString *const kKeyLockedPhotosBiometricEnabled = @"IMPrefsLockedPhotosBiometricEnabled";
+
+NSNotificationName const IMPrefsBackupEnabledDidChangeNotification = @"IMPrefsBackupEnabledDidChangeNotification";
 
 @interface IMPrefs ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *backing;
 @property (nonatomic) dispatch_queue_t queue;
+- (void)applyDefaultValuesLocked;
 @end
 
 @implementation IMPrefs
@@ -31,20 +35,24 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 		    ? [[NSUserDefaults standardUserDefaults] persistentDomainForName:bundleId]
 		    : nil;
 		_backing = [NSMutableDictionary dictionaryWithDictionary:std ?: @{}];
-
-		NSDictionary<NSString *, id> *defaultValues = @{
-			kKeyWifiOnlyUpload: @YES,
-			kKeyThumbnailQuality: IMAssetMediaSizeThumbnail,
-			kKeyAllowInsecureTLS: @NO,
-			kKeyBackupEnabled: @NO,
-		};
-		[defaultValues enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
-			if (self.backing[key] == nil) {
-				self.backing[key] = value;
-			}
-		}];
+		[self applyDefaultValuesLocked];
 	}
 	return self;
+}
+
+- (void)applyDefaultValuesLocked {
+	NSDictionary<NSString *, id> *defaultValues = @{
+		kKeyWifiOnlyUpload: @YES,
+		kKeyThumbnailQuality: IMAssetMediaSizeThumbnail,
+		kKeyAllowInsecureTLS: @NO,
+		kKeyBackupEnabled: @NO,
+		kKeyLockedPhotosBiometricEnabled: @NO,
+	};
+	[defaultValues enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
+		if (self.backing[key] == nil) {
+			self.backing[key] = value;
+		}
+	}];
 }
 
 #pragma mark - Generic interface
@@ -94,6 +102,17 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 	return [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
+- (void)reloadFromPersistence {
+	dispatch_sync(self.queue, ^{
+		NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+		(void)[defaults synchronize];
+		NSString *bundleId = [NSBundle mainBundle].bundleIdentifier;
+		NSDictionary *persisted = bundleId ? [defaults persistentDomainForName:bundleId] : nil;
+		self.backing = [NSMutableDictionary dictionaryWithDictionary:persisted ?: @{}];
+		[self applyDefaultValuesLocked];
+	});
+}
+
 #pragma mark - Typed settings
 
 - (BOOL)wifiOnlyUpload {
@@ -125,7 +144,21 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 }
 
 - (void)setBackupEnabled:(BOOL)backupEnabled {
+	BOOL changed = self.backupEnabled != backupEnabled;
 	[self setBool:backupEnabled forKey:kKeyBackupEnabled];
+	if (changed) {
+		[[NSNotificationCenter defaultCenter] postNotificationName:IMPrefsBackupEnabledDidChangeNotification
+		                                                    object:self
+		                                                  userInfo:@{ @"enabled": @(backupEnabled) }];
+	}
+}
+
+- (BOOL)lockedPhotosBiometricEnabled {
+	return [self boolForKey:kKeyLockedPhotosBiometricEnabled];
+}
+
+- (void)setLockedPhotosBiometricEnabled:(BOOL)lockedPhotosBiometricEnabled {
+	[self setBool:lockedPhotosBiometricEnabled forKey:kKeyLockedPhotosBiometricEnabled];
 }
 
 @end

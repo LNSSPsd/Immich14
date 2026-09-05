@@ -1,7 +1,10 @@
 #import "AssetViewController.h"
 #import "AssetDetailViewController.h"
+#import "AssetEditViewController.h"
 #import "AddToAlbumViewController.h"
 #import "IMAssetApi.h"
+#import "IMSharedLinkApi.h"
+#import "SharedLinkEditorViewController.h"
 #import "IMThumbCache.h"
 #import "common.h"
 #import <AVFoundation/AVFoundation.h>
@@ -25,6 +28,30 @@ static CGFloat IMViewerMaxPixelSize(void) {
 
 static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPixelSize) {
 	CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+	if (!source) {
+		return nil;
+	}
+	NSDictionary *options = @{
+		(__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+		(__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+		(__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
+		(__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(maxPixelSize),
+	};
+	CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+	CFRelease(source);
+	if (!cgImage) {
+		return nil;
+	}
+	UIImage *image = [UIImage imageWithCGImage:cgImage];
+	CGImageRelease(cgImage);
+	return image;
+}
+
+static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixelSize) {
+	if (!url.isFileURL || url.path.length == 0) {
+		return nil;
+	}
+	CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
 	if (!source) {
 		return nil;
 	}
@@ -256,6 +283,8 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 - (BOOL)canBeginDismissPan;
 - (nullable UIImageView *)transitionImageViewForDismissal;
 - (void)setOCRVisible:(BOOL)visible;
+- (void)setEditedImage:(nullable UIImage *)image;
+- (void)reloadEditedImage;
 @end
 
 @interface AssetPageContentViewController () <UIScrollViewDelegate, PHLivePhotoViewDelegate>
@@ -267,6 +296,7 @@ static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPi
 @property (nonatomic, strong, nullable) UILabel *errorLabel;
 @property (nonatomic) BOOL wantsAutoplay;
 @property (nonatomic) BOOL hasFitInitialZoom;
+@property (nonatomic) BOOL prefersEditedMedia;
 @property (nonatomic, strong, nullable) IMOcrOverlayView *ocrOverlayView;
 @property (nonatomic, strong, nullable) NSNumber *ocrHasText;
 @property (nonatomic) BOOL ocrVisible;
@@ -436,19 +466,29 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	    }];
 
 	CGFloat maxPixelSize = IMViewerMaxPixelSize();
-	self.loadTask = [IMAssetApi originalDataForAssetId:assetId
-	                                          completion:^(NSData *_Nullable data, NSError *_Nullable error) {
+	NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMOriginalCache"];
+	NSString *suffix = self.prefersEditedMedia ? @"edited" : @"original";
+	NSString *fileName = [NSString stringWithFormat:@"%@-%@-%@", assetId, suffix, [[NSUUID UUID] UUIDString]];
+	NSURL *destinationURL = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:fileName]];
+	self.loadTask = [IMAssetApi originalFileForAssetId:assetId
+	                                               edited:self.prefersEditedMedia
+	                                      destinationURL:destinationURL
+	                                          completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
 		    if (!strongSelf) {
 			    return;
 		    }
-		    if (!data) {
+		    if (!fileURL) {
 			    [strongSelf showLoadError];
 			    return;
 		    }
-		    [strongSelf stageLivePairImageData:data];
+		    if (!strongSelf.prefersEditedMedia && strongSelf.asset.livePhotoVideoId) {
+			    NSData *pairData = [NSData dataWithContentsOfURL:fileURL options:NSDataReadingMappedIfSafe error:NULL];
+			    if (pairData) [strongSelf stageLivePairImageData:pairData];
+		    }
 		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-			    UIImage *original = IMDownsampledImageFromData(data, maxPixelSize);
+			    UIImage *original = IMDownsampledImageFromURL(fileURL, maxPixelSize);
+			    [[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
 			    dispatch_async(dispatch_get_main_queue(), ^{
 				    typeof(self) innerSelf = weakSelf;
 				    if (!innerSelf) {
@@ -480,6 +520,49 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	self.imageView.frame = (CGRect){ CGPointZero, image.size };
 	self.scrollView.contentSize = image.size;
 	[self fitImagePreservingRelativeZoom:relativeZoom];
+}
+
+- (void)setEditedImage:(nullable UIImage *)image {
+	if (!self.asset.isImage) {
+		return;
+	}
+	if (image) {
+		self.prefersEditedMedia = YES;
+		[self showImage:image];
+		return;
+	}
+	self.prefersEditedMedia = NO;
+	[self startImageLoad];
+}
+
+- (void)reloadEditedImage {
+	if (!self.asset.isImage) {
+		return;
+	}
+	NSString *assetId = self.asset.assetId;
+	CGFloat maxPixelSize = IMViewerMaxPixelSize();
+	__weak typeof(self) weakSelf = self;
+	NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMOriginalCache"];
+	NSString *fileName = [NSString stringWithFormat:@"%@-edited-%@", assetId, [[NSUUID UUID] UUIDString]];
+	NSURL *destinationURL = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:fileName]];
+	[IMAssetApi originalFileForAssetId:assetId
+	                             edited:YES
+	                    destinationURL:destinationURL
+	                        completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
+		if (!fileURL) {
+			return; 
+		}
+		dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+			UIImage *edited = IMDownsampledImageFromURL(fileURL, maxPixelSize);
+			[[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				typeof(self) strongSelf = weakSelf;
+				if (strongSelf && edited) {
+					[strongSelf showImage:edited];
+				}
+			});
+		});
+	}];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -681,34 +764,18 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		return;
 	}
 	__weak typeof(self) weakSelf = self;
-	self.loadTask = [IMAssetApi videoPlaybackDataForAssetId:assetId
-	                                              completion:^(NSData *_Nullable data, NSError *_Nullable error) {
+	self.loadTask = [IMAssetApi videoPlaybackFileForAssetId:assetId
+	                                           destinationURL:[NSURL fileURLWithPath:cachePath]
+	                                               completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
 		    if (!strongSelf) {
 			    return;
 		    }
-		    if (!data) {
+		    if (!fileURL) {
 			    [strongSelf showLoadError];
 			    return;
 		    }
-		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-			    [[NSFileManager defaultManager] createDirectoryAtPath:IMVideoCacheDirectory()
-			                                withIntermediateDirectories:YES
-			                                                 attributes:nil
-			                                                      error:NULL];
-			    BOOL wrote = [data writeToFile:cachePath atomically:YES];
-			    dispatch_async(dispatch_get_main_queue(), ^{
-				    typeof(self) innerSelf = weakSelf;
-				    if (!innerSelf) {
-					    return;
-				    }
-				    if (wrote) {
-					    [innerSelf attachPlayerWithPath:cachePath];
-				    } else {
-					    [innerSelf showLoadError];
-				    }
-			    });
-		    });
+		    [strongSelf attachPlayerWithPath:fileURL.path ?: cachePath];
 	    }];
 }
 
@@ -1003,27 +1070,15 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		return;
 	}
 	__weak typeof(self) weakSelf = self;
-	self.liveVideoTask = [IMAssetApi videoPlaybackDataForAssetId:liveVideoId
-	                                                  completion:^(NSData *_Nullable data, NSError *_Nullable error) {
+	self.liveVideoTask = [IMAssetApi videoPlaybackFileForAssetId:liveVideoId
+	                                             destinationURL:[NSURL fileURLWithPath:path]
+	                                                 completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf || !data) {
+		    if (!strongSelf || !fileURL) {
 			    return;
 		    }
-		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-			    [[NSFileManager defaultManager] createDirectoryAtPath:IMLivePairDirectory()
-			                              withIntermediateDirectories:YES
-			                                               attributes:nil
-			                                                    error:NULL];
-			    BOOL wrote = [data writeToFile:path atomically:YES];
-			    dispatch_async(dispatch_get_main_queue(), ^{
-				    typeof(self) innerSelf = weakSelf;
-				    if (!innerSelf || !wrote) {
-					    return;
-				    }
-				    innerSelf.livePairVideoPath = path;
-				    [innerSelf requestLivePhotoIfPaired];
-			    });
-		    });
+		    strongSelf.livePairVideoPath = fileURL.path ?: path;
+		    [strongSelf requestLivePhotoIfPaired];
 	    }];
 }
 
@@ -1167,12 +1222,23 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic, strong) UIPageViewController *pageViewController;
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
+@property (nonatomic, strong) UIButton *slideshowButton;
 @property (nonatomic, strong) UIButton *ocrButton;
 @property (nonatomic, strong) UIButton *addToAlbumButton;
 @property (nonatomic, strong) UIButton *favoriteButton;
 @property (nonatomic, strong) UIButton *shareButton;
+@property (nonatomic, strong) UIButton *editButton;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *favoriteOverrides;
 @property (nonatomic) BOOL ocrOn;
+@property (nonatomic) BOOL slideshowPlaying;
+@property (nonatomic) BOOL slideshowTransitioning;
+@property (nonatomic, strong, nullable) NSTimer *slideshowTimer;
+- (void)shareOriginalFileForAsset:(IMAsset *)asset;
+- (void)createSharedLinkForAsset:(IMAsset *)asset;
+- (void)editCurrentAsset;
+- (void)updateEditButton;
+- (void)presentShareFailure;
+- (void)presentShareFailureWithMessage:(NSString *)message;
 @end
 
 @implementation AssetViewController
@@ -1270,6 +1336,11 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	[self.view addGestureRecognizer:dismissPan];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self stopSlideshow];
+}
+
 - (void)setUpChrome {
 	self.topBar = [self blurBar];
 	[self.view addSubview:self.topBar];
@@ -1277,6 +1348,11 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	UIButton *closeButton = [self chromeButtonWithSymbol:@"xmark.circle.fill"];
 	[closeButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.topBar.contentView addSubview:closeButton];
+	self.slideshowButton = [self chromeButtonWithSymbol:@"play.circle"];
+	self.slideshowButton.accessibilityLabel = _(@"Start slideshow");
+	self.slideshowButton.enabled = self.assets.count > 1;
+	[self.slideshowButton addTarget:self action:@selector(toggleSlideshow) forControlEvents:UIControlEventTouchUpInside];
+	[self.topBar.contentView addSubview:self.slideshowButton];
 
 	self.bottomBar = [self blurBar];
 	[self.view addSubview:self.bottomBar];
@@ -1288,6 +1364,11 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	self.favoriteButton = [self chromeButtonWithSymbol:@"heart"];
 	[self.favoriteButton addTarget:self action:@selector(favoriteTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.favoriteButton];
+
+	self.editButton = [self chromeButtonWithSymbol:@"slider.horizontal.3"];
+	self.editButton.accessibilityLabel = _(@"Edit photo");
+	[self.editButton addTarget:self action:@selector(editCurrentAsset) forControlEvents:UIControlEventTouchUpInside];
+	[self.bottomBar.contentView addSubview:self.editButton];
 
 	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
 	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -1307,6 +1388,8 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		[self.topBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
 		[self.topBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
 		[self.topBar.bottomAnchor constraintEqualToAnchor:closeButton.bottomAnchor constant:10],
+		[self.slideshowButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
+		[self.slideshowButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:6],
 
 		[closeButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
 		[closeButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:6],
@@ -1322,6 +1405,10 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		[self.favoriteButton.leadingAnchor constraintEqualToAnchor:self.shareButton.trailingAnchor constant:32],
 		[self.favoriteButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
 
+		[self.editButton.leadingAnchor constraintEqualToAnchor:self.favoriteButton.trailingAnchor constant:24],
+		[self.editButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+		[self.editButton.trailingAnchor constraintLessThanOrEqualToAnchor:infoButton.leadingAnchor constant:-24],
+
 		[infoButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
 		[infoButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-6],
 
@@ -1333,6 +1420,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	]];
 
 	[self updateFavoriteButton];
+	[self updateEditButton];
 }
 
 - (UIVisualEffectView *)blurBar {
@@ -1354,7 +1442,67 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)closeTapped {
+	[self stopSlideshow];
 	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)toggleSlideshow {
+	if (self.slideshowPlaying) {
+		[self stopSlideshow];
+		return;
+	}
+	if (self.assets.count < 2) return;
+	self.slideshowPlaying = YES;
+	self.slideshowButton.accessibilityLabel = _(@"Stop slideshow");
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		[self.slideshowButton setImage:[UIImage systemImageNamed:@"pause.circle" withConfiguration:config] forState:UIControlStateNormal];
+	}
+	[self.slideshowTimer invalidate];
+	self.slideshowTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
+	                                                       target:self
+	                                                     selector:@selector(advanceSlideshow)
+	                                                     userInfo:nil
+	                                                      repeats:YES];
+}
+
+- (void)stopSlideshow {
+	self.slideshowPlaying = NO;
+	self.slideshowTransitioning = NO;
+	[self.slideshowTimer invalidate];
+	self.slideshowTimer = nil;
+	if (!self.slideshowButton) return;
+	self.slideshowButton.accessibilityLabel = _(@"Start slideshow");
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		[self.slideshowButton setImage:[UIImage systemImageNamed:@"play.circle" withConfiguration:config] forState:UIControlStateNormal];
+	}
+}
+
+- (void)advanceSlideshow {
+	if (!self.slideshowPlaying || self.slideshowTransitioning || self.assets.count < 2 || !self.pageViewController) return;
+	NSInteger nextIndex = self.currentIndex + 1;
+	if (nextIndex >= (NSInteger)self.assets.count) nextIndex = 0;
+	AssetPageContentViewController *next = [self pageForIndex:nextIndex];
+	self.slideshowTransitioning = YES;
+	UIPageViewControllerNavigationDirection direction = nextIndex >= self.currentIndex
+	    ? UIPageViewControllerNavigationDirectionForward
+	    : UIPageViewControllerNavigationDirectionReverse;
+	__weak typeof(self) weakSelf = self;
+	[self.pageViewController setViewControllers:@[ next ]
+                                    direction:direction
+                                     animated:YES
+	                                   completion:^(BOOL finished) {
+		AssetViewController *strongSelf = weakSelf;
+		if (strongSelf) strongSelf.slideshowTransitioning = NO;
+		if (!strongSelf || !finished || !strongSelf.slideshowPlaying) return;
+		AssetPageContentViewController *current = (AssetPageContentViewController *)strongSelf.pageViewController.viewControllers.firstObject;
+		strongSelf.currentIndex = [strongSelf indexOfPage:current];
+		[current playIfVideo];
+		[strongSelf updateFavoriteButton];
+		[strongSelf updateEditButton];
+		strongSelf.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
+	}];
 }
 
 - (void)infoTapped {
@@ -1387,6 +1535,44 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	self.favoriteButton.tintColor = favorite ? UIColor.systemRedColor : UIColor.whiteColor;
 }
 
+- (void)updateEditButton {
+	if (!self.editButton || self.assets.count == 0) {
+		return;
+	}
+	IMAsset *asset = self.assets[self.currentIndex];
+	BOOL available = asset.isImage && asset.livePhotoVideoId.length == 0;
+	self.editButton.hidden = !available;
+	self.editButton.enabled = available;
+}
+
+- (void)editCurrentAsset {
+	if (self.assets.count == 0) {
+		return;
+	}
+	IMAsset *asset = self.assets[self.currentIndex];
+	if (!asset.isImage || asset.livePhotoVideoId.length > 0) {
+		return;
+	}
+	AssetEditViewController *editor = [[AssetEditViewController alloc] initWithAsset:asset];
+	__weak typeof(self) weakSelf = self;
+	editor.onSaved = ^(UIImage *_Nullable previewImage) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || strongSelf.assets.count == 0) {
+			return;
+		}
+		AssetPageContentViewController *current =
+		    (AssetPageContentViewController *)strongSelf.pageViewController.viewControllers.firstObject;
+		if (previewImage) {
+			[current setEditedImage:previewImage];
+		} else {
+			[current setEditedImage:nil];
+		}
+	};
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
+	nav.modalPresentationStyle = UIModalPresentationFullScreen;
+	[self presentViewController:nav animated:YES completion:nil];
+}
+
 - (void)favoriteTapped {
 	IMAsset *asset = self.assets[self.currentIndex];
 	NSString *assetId = asset.assetId;
@@ -1408,57 +1594,127 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 
 - (void)shareTapped {
 	IMAsset *asset = self.assets[self.currentIndex];
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Share")
+	                                                                 message:nil
+	                                                          preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Share original file")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		[weakSelf shareOriginalFileForAsset:asset];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Create Immich link")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		[weakSelf createSharedLinkForAsset:asset];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	sheet.popoverPresentationController.sourceView = self.shareButton;
+	sheet.popoverPresentationController.sourceRect = self.shareButton.bounds;
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)shareOriginalFileForAsset:(IMAsset *)asset {
 	NSString *assetId = asset.assetId;
 	NSString *fallbackName = [NSString stringWithFormat:@"%@.%@", assetId, asset.isImage ? @"jpg" : @"mp4"];
 	self.shareButton.enabled = NO;
 	__weak typeof(self) weakSelf = self;
 	[IMAssetApi assetDetailForAssetId:assetId
 	                        completion:^(IMAssetDetail *_Nullable detail, NSError *_Nullable error) {
-		    NSString *filename = detail.originalFileName.length > 0 ? detail.originalFileName : fallbackName;
-		    filename = [filename stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-		    [IMAssetApi originalDataForAssetId:assetId
-		                             completion:^(NSData *_Nullable data, NSError *_Nullable dataError) {
-			    typeof(self) strongSelf = weakSelf;
-			    if (!strongSelf) {
-				    return;
+			    NSString *filename = detail.originalFileName.length > 0 ? detail.originalFileName : fallbackName;
+			    filename = filename.lastPathComponent;
+			    filename = [filename stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+			    filename = [filename stringByReplacingOccurrencesOfString:@"\\" withString:@"_"];
+			    filename = [filename stringByTrimmingCharactersInSet:NSCharacterSet.controlCharacterSet];
+			    if (filename.length == 0 || [filename isEqualToString:@"."] || [filename isEqualToString:@".."]) {
+				    filename = fallbackName;
 			    }
-			    if (!data) {
+			NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMShare"];
+			NSURL *destinationURL = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:filename]];
+			[IMAssetApi originalFileForAssetId:assetId
+			                             edited:NO
+			                    destinationURL:destinationURL
+			                        completion:^(NSURL *_Nullable fileURL, NSError *_Nullable dataError) {
+				    typeof(self) strongSelf = weakSelf;
+				    if (!strongSelf) {
+					    return;
+				    }
+				    if (!fileURL) {
+					    strongSelf.shareButton.enabled = YES;
+					    [strongSelf presentShareFailure];
+					    return;
+				    }
 				    strongSelf.shareButton.enabled = YES;
-				    [strongSelf presentShareFailure];
-				    return;
-			    }
-			    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-				    NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMShare"];
-				    [[NSFileManager defaultManager] createDirectoryAtPath:directory
-				                                withIntermediateDirectories:YES
-				                                                 attributes:nil
-				                                                      error:NULL];
-				    NSString *path = [directory stringByAppendingPathComponent:filename];
-				    BOOL wrote = [data writeToFile:path atomically:YES];
-				    dispatch_async(dispatch_get_main_queue(), ^{
-					    typeof(self) innerSelf = weakSelf;
-					    if (!innerSelf) {
-						    return;
-					    }
-					    innerSelf.shareButton.enabled = YES;
-					    if (!wrote) {
-						    [innerSelf presentShareFailure];
-						    return;
-					    }
-					    UIActivityViewController *activity =
-					        [[UIActivityViewController alloc] initWithActivityItems:@[ [NSURL fileURLWithPath:path] ]
-					                                          applicationActivities:nil];
-					    activity.popoverPresentationController.sourceView = innerSelf.shareButton;
-					    [innerSelf presentViewController:activity animated:YES completion:nil];
-				    });
-			    });
-		    }];
+				    UIActivityViewController *activity =
+				        [[UIActivityViewController alloc] initWithActivityItems:@[ fileURL ]
+				                                                  applicationActivities:nil];
+				    activity.popoverPresentationController.sourceView = strongSelf.shareButton;
+				    activity.completionWithItemsHandler = ^(UIActivityType activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+					    (void)activityType;
+					    (void)completed;
+					    (void)returnedItems;
+					    (void)activityError;
+					    [[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
+				    };
+				    [strongSelf presentViewController:activity animated:YES completion:nil];
+			    }];
 	    }];
 }
 
+- (void)createSharedLinkForAsset:(IMAsset *)asset {
+	__weak typeof(self) weakSelf = self;
+	__weak SharedLinkEditorViewController *weakEditor = nil;
+	SharedLinkEditorViewController *editor = [SharedLinkEditorViewController editorForNewLinkWithTitle:_(@"Individual photo")
+	                                                                                         saveHandler:^(NSDictionary<NSString *,id> *fields) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf) return;
+		strongSelf.shareButton.enabled = NO;
+		[IMSharedLinkApi createLinkForAssetIds:@[ asset.assetId ] options:fields completion:^(IMSharedLink *link, NSError *error) {
+			typeof(self) inner = weakSelf;
+			if (!inner) return;
+			inner.shareButton.enabled = YES;
+			if (!link || error) {
+				[weakEditor setSaving:NO];
+				[inner presentShareFailureWithMessage:error.localizedDescription ?: _(@"The server could not create a shared link.")];
+				return;
+			}
+			NSURL *url = [IMSharedLinkApi publicURLForLink:link];
+			if (!url) {
+				[weakEditor setSaving:NO];
+				[inner presentShareFailureWithMessage:_(@"The server returned an invalid shared link.")];
+				return;
+			}
+			[inner dismissViewControllerAnimated:YES completion:^{
+				UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Immich link ready")
+				                                                                 message:url.absoluteString
+				                                                          preferredStyle:UIAlertControllerStyleAlert];
+				[alert addAction:[UIAlertAction actionWithTitle:_(@"Copy") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+					[UIPasteboard generalPasteboard].string = url.absoluteString;
+				}]];
+				[alert addAction:[UIAlertAction actionWithTitle:_(@"Share") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+					UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[ url ]
+					                                                                  applicationActivities:nil];
+					activity.popoverPresentationController.sourceView = inner.shareButton;
+					[inner presentViewController:activity animated:YES completion:nil];
+				}]];
+				[alert addAction:[UIAlertAction actionWithTitle:_(@"Done") style:UIAlertActionStyleCancel handler:nil]];
+				[inner presentViewController:alert animated:YES completion:nil];
+			}];
+		}];
+	}];
+	weakEditor = editor;
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
+	nav.modalPresentationStyle = UIModalPresentationFormSheet;
+	[self presentViewController:nav animated:YES completion:nil];
+}
+
 - (void)presentShareFailure {
+	[self presentShareFailureWithMessage:_(@"The original file could not be downloaded.")];
+}
+
+- (void)presentShareFailureWithMessage:(NSString *)message {
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Couldn't Share")
-	                                                               message:_(@"The original file could not be downloaded.")
+	                                                               message:message
 	                                                        preferredStyle:UIAlertControllerStyleAlert];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
 	[self presentViewController:alert animated:YES completion:nil];
@@ -1520,6 +1776,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	if (!completed) {
 		return;
 	}
+	self.slideshowTransitioning = NO;
 	for (AssetPageContentViewController *previous in previousViewControllers) {
 		[previous pauseIfVideo];
 	}
@@ -1527,6 +1784,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	self.currentIndex = [self indexOfPage:current];
 	[current playIfVideo];
 	[self updateFavoriteButton];
+	[self updateEditButton];
 
 	self.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	if (self.ocrOn) {

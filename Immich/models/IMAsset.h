@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, readonly, nullable) NSString *city; 
 @property (nonatomic, copy, readonly, nullable) NSString *country;
 @property (nonatomic, copy, readonly, nullable) NSString *livePhotoVideoId;
+@property (nonatomic, copy, readonly, nullable) NSString *stackId;
+@property (nonatomic, readonly) NSInteger stackAssetCount;
 
 + (NSArray<IMAsset *> *)assetsFromTimeBucketJSON:(NSDictionary *)json;
 

@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)clearWithCompletion:(void (^)(void))completion;
 
+- (void)invalidateThumbnailsForAssetIds:(NSSet<NSString *> *)assetIds
+                             completion:(void (^)(void))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

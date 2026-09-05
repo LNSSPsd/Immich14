@@ -35,6 +35,9 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 		NSLog(@"IMDatabase: failed to open %@: %s", path, sqlite3_errmsg(_db));
 		return;
 	}
+	sqlite3_busy_timeout(self.db, 3000);
+	[self exec:@"PRAGMA journal_mode=WAL"];
+	[self exec:@"PRAGMA synchronous=NORMAL"];
 
 	[self exec:@"CREATE TABLE IF NOT EXISTS buckets ("
 	            "  timeBucket TEXT PRIMARY KEY,"
@@ -52,14 +55,35 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 	            "  ratio REAL"
 	            ")"];
 	[self exec:@"CREATE INDEX IF NOT EXISTS idx_assets_bucket ON assets(timeBucket, position)"];
-	[self exec:@"ALTER TABLE assets ADD COLUMN city TEXT"];
-	[self exec:@"ALTER TABLE assets ADD COLUMN country TEXT"];
-	[self exec:@"ALTER TABLE assets ADD COLUMN livePhotoVideoId TEXT"];
+	[self addColumnIfMissing:@"city" type:@"TEXT" table:@"assets"];
+	[self addColumnIfMissing:@"country" type:@"TEXT" table:@"assets"];
+	[self addColumnIfMissing:@"livePhotoVideoId" type:@"TEXT" table:@"assets"];
 	[self exec:@"CREATE TABLE IF NOT EXISTS sync_state ("
 	            "  deviceAssetId TEXT PRIMARY KEY,"
 	            "  assetId TEXT,"
 	            "  state INTEGER NOT NULL"
 	            ")"];
+	[self exec:@"CREATE INDEX IF NOT EXISTS idx_sync_state_state ON sync_state(state)"];
+}
+
+- (void)addColumnIfMissing:(NSString *)column type:(NSString *)type table:(NSString *)table {
+	sqlite3_stmt *statement = NULL;
+	NSString *sql = [NSString stringWithFormat:@"PRAGMA table_info(%@)", table];
+	BOOL exists = NO;
+	if (sqlite3_prepare_v2(self.db, sql.UTF8String, -1, &statement, NULL) == SQLITE_OK) {
+		while (sqlite3_step(statement) == SQLITE_ROW) {
+			const char *name = (const char *)sqlite3_column_text(statement, 1);
+			if (name && [column isEqualToString:[NSString stringWithUTF8String:name]]) {
+				exists = YES;
+				break;
+			}
+		}
+	}
+	sqlite3_finalize(statement);
+	if (!exists) {
+		NSString *alter = [NSString stringWithFormat:@"ALTER TABLE %@ ADD COLUMN %@ %@", table, column, type];
+		[self exec:alter];
+	}
 }
 
 - (void)exec:(NSString *)sql {

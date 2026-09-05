@@ -1,8 +1,17 @@
 #import "IMAsset.h"
 #import "common.h"
+#import <math.h>
 
 static id IMValueOrNil(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
+}
+
+static NSArray *IMArrayOrEmpty(id value) {
+	return [value isKindOfClass:[NSArray class]] ? value : @[];
+}
+
+static id IMArrayValue(NSArray *array, NSUInteger index) {
+	return index < array.count ? array[index] : nil;
 }
 
 @interface IMAsset ()
@@ -15,40 +24,77 @@ static id IMValueOrNil(id value) {
 @property (nonatomic, copy) NSString *city;
 @property (nonatomic, copy) NSString *country;
 @property (nonatomic, copy) NSString *livePhotoVideoId;
+@property (nonatomic, copy) NSString *stackId;
+@property (nonatomic) NSInteger stackAssetCount;
 @end
 
 @implementation IMAsset
 
 + (NSArray<IMAsset *> *)assetsFromTimeBucketJSON:(NSDictionary *)json {
+	if (![json isKindOfClass:[NSDictionary class]]) {
+		return @[];
+	}
 	NSArray<NSString *> *ids = json[@"id"];
 	if (![ids isKindOfClass:[NSArray class]]) {
 		return @[];
 	}
-	NSArray *fileCreatedAt = json[@"fileCreatedAt"];
-	NSArray *isFavorite = json[@"isFavorite"];
-	NSArray *isImage = json[@"isImage"];
-	NSArray *duration = json[@"duration"];
-	NSArray *ratio = json[@"ratio"];
-	NSArray *city = json[@"city"];
-	NSArray *country = json[@"country"];
-	NSArray *livePhotoVideoId = json[@"livePhotoVideoId"];
+	NSArray *fileCreatedAt = IMArrayOrEmpty(json[@"fileCreatedAt"]);
+	NSArray *isFavorite = IMArrayOrEmpty(json[@"isFavorite"]);
+	NSArray *isImage = IMArrayOrEmpty(json[@"isImage"]);
+	NSArray *duration = IMArrayOrEmpty(json[@"duration"]);
+	NSArray *ratio = IMArrayOrEmpty(json[@"ratio"]);
+	NSArray *city = IMArrayOrEmpty(json[@"city"]);
+	NSArray *country = IMArrayOrEmpty(json[@"country"]);
+	NSArray *livePhotoVideoId = IMArrayOrEmpty(json[@"livePhotoVideoId"]);
+	id stackValue = json[@"stack"];
+	NSArray *stack = IMArrayOrEmpty(stackValue);
 
 	NSMutableArray<IMAsset *> *assets = [NSMutableArray arrayWithCapacity:ids.count];
 	for (NSUInteger i = 0; i < ids.count; i++) {
 		IMAsset *asset = [[IMAsset alloc] init];
-		asset.assetId = ids[i];
-		asset.fileCreatedAt = (i < fileCreatedAt.count) ? fileCreatedAt[i] : @"";
-		asset.favorite = (i < isFavorite.count) ? [isFavorite[i] boolValue] : NO;
-		asset.image = (i < isImage.count) ? [isImage[i] boolValue] : YES;
-		id durationValue = (i < duration.count) ? duration[i] : nil;
+		id assetIdValue = IMArrayValue(ids, i);
+		if (![assetIdValue isKindOfClass:[NSString class]] || [assetIdValue length] == 0) {
+			continue;
+		}
+		asset.assetId = assetIdValue;
+		id createdValue = IMArrayValue(fileCreatedAt, i);
+		asset.fileCreatedAt = [createdValue isKindOfClass:[NSString class]] ? createdValue : @"";
+		id favoriteValue = IMValueOrNil(IMArrayValue(isFavorite, i));
+		asset.favorite = [favoriteValue isKindOfClass:[NSNumber class]] && [favoriteValue boolValue];
+		id imageValue = IMValueOrNil(IMArrayValue(isImage, i));
+		asset.image = imageValue == nil ? YES : ([imageValue isKindOfClass:[NSNumber class]] && [imageValue boolValue]);
+		id durationValue = IMArrayValue(duration, i);
 		asset.durationMs = IMDurationMsFromJSONValue(durationValue);
-		asset.ratio = (i < ratio.count) ? [ratio[i] doubleValue] : 1.0;
-		id cityValue = (i < city.count) ? IMValueOrNil(city[i]) : nil;
+		id ratioValue = IMArrayValue(ratio, i);
+		double ratioNumber = [ratioValue isKindOfClass:[NSNumber class]] ? [ratioValue doubleValue] : 1.0;
+		asset.ratio = isfinite(ratioNumber) && ratioNumber > 0 ? ratioNumber : 1.0;
+		id cityValue = IMValueOrNil(IMArrayValue(city, i));
 		asset.city = [cityValue isKindOfClass:[NSString class]] ? cityValue : nil;
-		id countryValue = (i < country.count) ? IMValueOrNil(country[i]) : nil;
+		id countryValue = IMValueOrNil(IMArrayValue(country, i));
 		asset.country = [countryValue isKindOfClass:[NSString class]] ? countryValue : nil;
-		id liveValue = (i < livePhotoVideoId.count) ? IMValueOrNil(livePhotoVideoId[i]) : nil;
+		id liveValue = IMValueOrNil(IMArrayValue(livePhotoVideoId, i));
 		asset.livePhotoVideoId = [liveValue isKindOfClass:[NSString class]] ? liveValue : nil;
+		id rowStackValue = IMValueOrNil(IMArrayValue(stack, i));
+		if ([rowStackValue isKindOfClass:[NSArray class]] && [(NSArray *)rowStackValue count] == 2) {
+			id sid = IMValueOrNil(rowStackValue[0]);
+			id count = IMValueOrNil(rowStackValue[1]);
+			if (![sid isKindOfClass:[NSString class]] || [(NSString *)sid length] == 0) {
+				continue;
+			}
+			asset.stackId = sid;
+			if ([count isKindOfClass:[NSNumber class]]) {
+				double number = [count doubleValue];
+				if (isfinite(number) && number >= 0 && floor(number) == number) {
+					asset.stackAssetCount = [count integerValue];
+				}
+			} else if ([count isKindOfClass:[NSString class]]) {
+				NSScanner *scanner = [NSScanner scannerWithString:count];
+				NSInteger integerCount = 0;
+				if ([scanner scanInteger:&integerCount] && scanner.isAtEnd && integerCount >= 0) {
+					asset.stackAssetCount = integerCount;
+				}
+			}
+		}
 		[assets addObject:asset];
 	}
 	return assets;
@@ -83,6 +129,17 @@ static id IMValueOrNil(id value) {
 	asset.ratio = height > 0 ? width / height : 1.0;
 	id liveValue = IMValueOrNil(dict[@"livePhotoVideoId"]);
 	asset.livePhotoVideoId = [liveValue isKindOfClass:[NSString class]] ? liveValue : nil;
+	NSDictionary *stack = IMValueOrNil(dict[@"stack"]);
+	if ([stack isKindOfClass:[NSDictionary class]]) {
+		id sid = IMValueOrNil(stack[@"id"]);
+		id count = IMValueOrNil(stack[@"assetCount"]);
+		asset.stackId = [sid isKindOfClass:[NSString class]] ? sid : nil;
+		if ([count isKindOfClass:[NSNumber class]]) {
+			asset.stackAssetCount = [count integerValue];
+		} else if ([count isKindOfClass:[NSString class]]) {
+			asset.stackAssetCount = [count integerValue];
+		}
+	}
 	return asset;
 }
 

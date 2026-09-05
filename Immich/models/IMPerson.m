@@ -3,6 +3,7 @@
 @interface IMPerson ()
 @property (nonatomic, copy) NSString *personId;
 @property (nonatomic, copy) NSString *name;
+@property (nonatomic) BOOL isHidden;
 @end
 
 @implementation IMPerson
@@ -19,6 +20,7 @@
 	IMPerson *person = [[IMPerson alloc] init];
 	person.personId = personId;
 	person.name = [name isKindOfClass:[NSString class]] ? name : @"";
+	person.isHidden = [dict[@"isHidden"] isKindOfClass:[NSNumber class]] ? [dict[@"isHidden"] boolValue] : NO;
 	return person;
 }
 

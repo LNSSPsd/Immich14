@@ -9,6 +9,7 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 @interface TimelineCell ()
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic, strong) UILabel *durationLabel;
+@property (nonatomic, strong) UILabel *stackLabel;
 @property (nonatomic, strong) UIImageView *syncBadgeView;
 @property (nonatomic, strong) UIImageView *selectionCircleView;
 @property (nonatomic, strong, nullable) IMThumbCacheTask *thumbTask;
@@ -38,6 +39,13 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 		self.durationLabel.textColor = UIColor.whiteColor;
 		self.durationLabel.hidden = YES;
 		[self.contentView addSubview:self.durationLabel];
+
+		self.stackLabel = [[UILabel alloc] init];
+		self.stackLabel.translatesAutoresizingMaskIntoConstraints = NO;
+		self.stackLabel.font = [UIFont boldSystemFontOfSize:11];
+		self.stackLabel.textColor = UIColor.whiteColor;
+		self.stackLabel.hidden = YES;
+		[self.contentView addSubview:self.stackLabel];
 
 		self.syncBadgeView = [[UIImageView alloc] init];
 		self.syncBadgeView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -69,6 +77,8 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 
 			[self.durationLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
 			[self.durationLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
+			[self.stackLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
+			[self.stackLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
 
 			[self.syncBadgeView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
 			[self.syncBadgeView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
@@ -138,9 +148,11 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	[self cancelPendingRequests];
 	self.imageView.image = nil;
 	self.syncBadgeView.hidden = YES;
+	self.stackLabel.hidden = YES;
 
 	if (!asset) {
 		self.durationLabel.hidden = YES;
+		self.stackLabel.hidden = YES;
 		[self startSkeletonPulse];
 		return;
 	}
@@ -152,6 +164,12 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 		NSInteger totalSeconds = asset.durationMs / 1000;
 		self.durationLabel.text = [NSString stringWithFormat:@"%ld:%02ld", (long)(totalSeconds / 60), (long)(totalSeconds % 60)];
 		self.durationLabel.hidden = NO;
+	}
+	if (asset.stackId.length > 0 && asset.stackAssetCount > 1) {
+		self.stackLabel.text = [NSString stringWithFormat:@"▦ %ld", (long)asset.stackAssetCount];
+		self.stackLabel.hidden = NO;
+	} else {
+		self.stackLabel.hidden = YES;
 	}
 
 	NSString *assetId = asset.assetId;
@@ -167,6 +185,7 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	[self cancelPendingRequests];
 	self.imageView.image = nil;
 	self.durationLabel.hidden = YES;
+	self.stackLabel.hidden = YES;
 
 	if (!asset) {
 		self.syncBadgeView.hidden = YES;
@@ -205,6 +224,7 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	self.imageView.image = nil;
 	self.durationLabel.hidden = YES;
 	self.syncBadgeView.hidden = YES;
+	self.stackLabel.hidden = YES;
 }
 
 @end

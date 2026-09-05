@@ -7,6 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 #define IM_PREFS_QUEUE "com.lns.immich-ios-14.prefs"
 
+extern NSNotificationName const IMPrefsBackupEnabledDidChangeNotification;
+
 @interface IMPrefs : NSObject
 
 + (instancetype)shared;
@@ -19,10 +21,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setString:(nullable NSString *)value forKey:(NSString *)key;
 - (BOOL)synchronize;
 
+- (void)reloadFromPersistence;
+
 @property (nonatomic) BOOL wifiOnlyUpload; 
 @property (nonatomic, copy) NSString *thumbnailQuality; 
 @property (nonatomic) BOOL allowInsecureTLS; 
 @property (nonatomic) BOOL backupEnabled; 
+@property (nonatomic) BOOL lockedPhotosBiometricEnabled;
 
 @end
 

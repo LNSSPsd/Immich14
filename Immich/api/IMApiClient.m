@@ -108,18 +108,45 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return components.URL;
 }
 
+- (nullable NSURL *)URLForPath:(NSString *)path
+	                  queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems {
+	NSURL *base = [self effectiveBaseURL];
+	if (!base) {
+		return nil;
+	}
+	NSString *baseString = base.absoluteString;
+	if ([baseString hasSuffix:@"/"]) {
+		baseString = [baseString substringToIndex:baseString.length - 1];
+	}
+	if (![path hasPrefix:@"/"]) {
+		path = [@"/" stringByAppendingString:path];
+	}
+	NSURL *full = [NSURL URLWithString:[baseString stringByAppendingString:path]];
+	if (!full) {
+		return nil;
+	}
+	if (queryItems.count == 0) {
+		return full;
+	}
+	NSURLComponents *components = [NSURLComponents componentsWithURL:full resolvingAgainstBaseURL:YES];
+	components.queryItems = queryItems;
+	return components.URL;
+}
+
 - (NSMutableURLRequest *)requestWithURL:(NSURL *)url method:(NSString *)method body:(nullable id)body {
 	NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
 	request.HTTPMethod = method;
 	[request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
-	NSString *apiKey = self.overrideAPIKey ?: [IMSession shared].apiKeyHeaderValue;
-	if (apiKey) {
-		[request setValue:apiKey forHTTPHeaderField:@"x-api-key"];
-	} else {
-		NSString *auth = [IMSession shared].authorizationHeader;
-		if (auth) {
-			[request setValue:auth forHTTPHeaderField:@"Authorization"];
+	if (!self.anonymous) {
+		NSString *apiKey = self.overrideAPIKey ?: [IMSession shared].apiKeyHeaderValue;
+		if (apiKey) {
+			[request setValue:apiKey forHTTPHeaderField:@"x-api-key"];
+		} else {
+			NSString *auth = [IMSession shared].authorizationHeader;
+			if (auth) {
+				[request setValue:auth forHTTPHeaderField:@"Authorization"];
+			}
 		}
 	}
 	if (body) {
@@ -135,6 +162,12 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	                        userInfo:@{ NSLocalizedDescriptionKey: _(@"No server URL configured.") }];
 }
 
+- (NSError *)invalidJSONBodyError {
+	return [NSError errorWithDomain:IMApiErrorDomain
+	                            code:IMApiErrorDecoding
+	                        userInfo:@{ NSLocalizedDescriptionKey: _(@"The request body contains unsupported values.") }];
+}
+
 - (void)failJSON:(IMJSONHandler)completion withError:(NSError *)error {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		completion(nil, error);
@@ -144,8 +177,15 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 #pragma mark - JSON requests
 
 - (NSURLSessionTask *)dataTaskWithRequest:(NSURLRequest *)request completion:(IMJSONHandler)completion {
+	NSURLSession *session = self.urlSession;
+	if (!session) {
+		[self failJSON:completion withError:[NSError errorWithDomain:IMApiErrorDomain
+		                                                   code:IMApiErrorInvalidURL
+		                                               userInfo:@{NSLocalizedDescriptionKey: _(@"The network client is no longer available.")}]];
+		return nil;
+	}
 	NSURLSessionDataTask *task =
-	    [self.urlSession dataTaskWithRequest:request
+	    [session dataTaskWithRequest:request
 	                        completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response, NSError *_Nullable error) {
 		    [self handleData:data response:response error:error completion:completion];
 	    }];
@@ -166,8 +206,9 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 
 	NSInteger status = [(NSHTTPURLResponse *)response statusCode];
 	id json = nil;
+	NSError *decodingError = nil;
 	if (data.length > 0) {
-		json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+		json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&decodingError];
 	}
 
 	if (status < 200 || status >= 300) {
@@ -180,6 +221,18 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 		                                        }];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			completion(nil, serverError);
+		});
+		return;
+	}
+	if (decodingError != nil) {
+		NSError *apiError = [NSError errorWithDomain:IMApiErrorDomain
+	                                             code:IMApiErrorDecoding
+	                                         userInfo:@{
+			                                     NSLocalizedDescriptionKey: _(@"The server returned invalid JSON."),
+			                                     NSUnderlyingErrorKey: decodingError,
+	                                         }];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(nil, apiError);
 		});
 		return;
 	}
@@ -214,7 +267,22 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"GET" body:nil] completion:completion];
 }
 
+- (NSURLSessionTask *)GET:(NSString *)path
+	               queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+	               completion:(IMJSONHandler)completion {
+	NSURL *url = [self URLForPath:path queryItems:queryItems];
+	if (!url) {
+		[self failJSON:completion withError:[self invalidURLError]];
+		return nil;
+	}
+	return [self dataTaskWithRequest:[self requestWithURL:url method:@"GET" body:nil] completion:completion];
+}
+
 - (NSURLSessionTask *)POST:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		[self failJSON:completion withError:[self invalidJSONBodyError]];
+		return nil;
+	}
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
 		[self failJSON:completion withError:[self invalidURLError]];
@@ -223,7 +291,77 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return [self dataTaskWithRequest:[self requestWithURL:url method:@"POST" body:body] completion:completion];
 }
 
+- (NSURLSessionTask *)POST:(NSString *)path
+	                queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+	                      body:(nullable id)body
+	                completion:(IMJSONHandler)completion {
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		[self failJSON:completion withError:[self invalidJSONBodyError]];
+		return nil;
+	}
+	NSURL *url = [self URLForPath:path queryItems:queryItems];
+	if (!url) {
+		[self failJSON:completion withError:[self invalidURLError]];
+		return nil;
+	}
+	return [self dataTaskWithRequest:[self requestWithURL:url method:@"POST" body:body] completion:completion];
+}
+
+- (NSURLSessionTask *)POSTForm:(NSString *)path
+                         fields:(NSDictionary<NSString *, NSString *> *)fields
+                     completion:(IMJSONHandler)completion {
+	if (![fields isKindOfClass:[NSDictionary class]]) {
+		[self failJSON:completion withError:[NSError errorWithDomain:IMApiErrorDomain
+		                                                   code:IMApiErrorDecoding
+		                                               userInfo:@{NSLocalizedDescriptionKey: _(@"Form fields are invalid.")}]];
+		return nil;
+	}
+	NSURL *url = [self URLForPath:path query:nil];
+	if (!url) {
+		[self failJSON:completion withError:[self invalidURLError]];
+		return nil;
+	}
+	NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithCapacity:fields.count];
+	for (id rawKey in fields) {
+		if (![rawKey isKindOfClass:[NSString class]] || [(NSString *)rawKey length] == 0 ||
+		    [(NSString *)rawKey rangeOfCharacterFromSet:[NSCharacterSet controlCharacterSet]].location != NSNotFound) {
+			[self failJSON:completion withError:[NSError errorWithDomain:IMApiErrorDomain
+			                                                   code:IMApiErrorDecoding
+			                                               userInfo:@{NSLocalizedDescriptionKey: _(@"Form fields are invalid.")}]];
+			return nil;
+		}
+		id rawValue = fields[rawKey];
+		if (![rawValue isKindOfClass:[NSString class]] ||
+		    [(NSString *)rawValue rangeOfCharacterFromSet:[NSCharacterSet controlCharacterSet]].location != NSNotFound) {
+			[self failJSON:completion withError:[NSError errorWithDomain:IMApiErrorDomain
+			                                                   code:IMApiErrorDecoding
+			                                               userInfo:@{NSLocalizedDescriptionKey: _(@"Form fields are invalid.")}]];
+			return nil;
+		}
+		[items addObject:[NSURLQueryItem queryItemWithName:rawKey value:rawValue]];
+	}
+	NSMutableString *encoded = [NSMutableString string];
+	for (NSURLQueryItem *item in items) {
+		if (encoded.length > 0) [encoded appendString:@"&"];
+		NSString *name = item.name ?: @"";
+		NSString *value = item.value ?: @"";
+		NSURLComponents *one = [[NSURLComponents alloc] init];
+		one.queryItems = @[ [NSURLQueryItem queryItemWithName:name value:value] ];
+		NSString *query = one.percentEncodedQuery ?: @"";
+		[encoded appendString:query];
+	}
+	NSMutableURLRequest *request = [self requestWithURL:url method:@"POST" body:nil];
+	request.HTTPBody = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+	[request setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+	[request setValue:@"application/json, text/plain, */*" forHTTPHeaderField:@"Accept"];
+	return [self dataTaskWithRequest:request completion:completion];
+}
+
 - (NSURLSessionTask *)PUT:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		[self failJSON:completion withError:[self invalidJSONBodyError]];
+		return nil;
+	}
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
 		[self failJSON:completion withError:[self invalidURLError]];
@@ -233,6 +371,10 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 }
 
 - (NSURLSessionTask *)PATCH:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		[self failJSON:completion withError:[self invalidJSONBodyError]];
+		return nil;
+	}
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
 		[self failJSON:completion withError:[self invalidURLError]];
@@ -242,6 +384,10 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 }
 
 - (NSURLSessionTask *)DELETE:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion {
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		[self failJSON:completion withError:[self invalidJSONBodyError]];
+		return nil;
+	}
 	NSURL *url = [self URLForPath:path query:nil];
 	if (!url) {
 		[self failJSON:completion withError:[self invalidURLError]];
@@ -264,8 +410,16 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 		return nil;
 	}
 	NSURLRequest *request = [self requestWithURL:url method:@"GET" body:nil];
+	NSURLSession *session = self.urlSession;
+	if (!session) {
+		NSError *clientError = [NSError errorWithDomain:IMApiErrorDomain
+		                                            code:IMApiErrorInvalidURL
+		                                        userInfo:@{NSLocalizedDescriptionKey: _(@"The network client is no longer available.")}];
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, clientError); });
+		return nil;
+	}
 	NSURLSessionDataTask *task =
-	    [self.urlSession dataTaskWithRequest:request
+	    [session dataTaskWithRequest:request
 	                        completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response, NSError *_Nullable error) {
 		    if (error) {
 			    dispatch_async(dispatch_get_main_queue(), ^{
@@ -294,6 +448,133 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 	return task;
 }
 
+- (NSURLSessionTask *)downloadFile:(NSString *)path
+	                          query:(nullable NSDictionary<NSString *, NSString *> *)query
+	                 destinationURL:(NSURL *)destinationURL
+	                      completion:(IMFileHandler)completion {
+	return [self downloadFile:path
+	                    method:@"GET"
+	                     query:query
+	                      body:nil
+	            destinationURL:destinationURL
+	                 completion:completion];
+}
+
+- (NSURLSessionTask *)downloadFile:(NSString *)path
+	                         method:(NSString *)method
+	                          query:(nullable NSDictionary<NSString *, NSString *> *)query
+	                           body:(nullable id)body
+	                 destinationURL:(NSURL *)destinationURL
+	                      completion:(IMFileHandler)completion {
+	if (![destinationURL isKindOfClass:[NSURL class]] || !destinationURL.isFileURL || destinationURL.path.length == 0) {
+		NSError *error = [NSError errorWithDomain:IMApiErrorDomain
+	                                      code:IMApiErrorInvalidURL
+	                                  userInfo:@{NSLocalizedDescriptionKey: _(@"A local destination file is required.")}];
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, error); });
+		return nil;
+	}
+	if (![method isKindOfClass:[NSString class]] || method.length == 0 ||
+	    [method rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@" \t\r\n"]].location != NSNotFound) {
+		NSError *error = [NSError errorWithDomain:IMApiErrorDomain
+	                                      code:IMApiErrorInvalidURL
+	                                  userInfo:@{NSLocalizedDescriptionKey: _(@"A valid download method is required.")}];
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, error); });
+		return nil;
+	}
+	if (body && ![NSJSONSerialization isValidJSONObject:body]) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, [self invalidJSONBodyError]); });
+		return nil;
+	}
+	NSURL *url = [self URLForPath:path query:query];
+	if (!url) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, [self invalidURLError]); });
+		return nil;
+	}
+	NSURLSession *session = self.urlSession;
+	if (!session) {
+		NSError *error = [NSError errorWithDomain:IMApiErrorDomain
+		                                      code:IMApiErrorInvalidURL
+		                                  userInfo:@{NSLocalizedDescriptionKey: _(@"The network client is no longer available.")}];
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, error); });
+		return nil;
+	}
+	NSMutableURLRequest *request = [self requestWithURL:url method:method body:body];
+	[request setValue:@"*/*" forHTTPHeaderField:@"Accept"];
+	NSURL *destination = [destinationURL copy];
+	NSURLSessionDownloadTask *task = [session downloadTaskWithRequest:request
+	                                                completionHandler:^(NSURL *_Nullable location,
+	                                                                      NSURLResponse *_Nullable response,
+	                                                                      NSError *_Nullable error) {
+			NSError *resultError = error;
+			NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+			if (!resultError && (status < 200 || status >= 300)) {
+				NSData *errorBody = nil;
+				if (location) {
+					NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:location.path error:NULL];
+					NSNumber *lengthNumber = attrs[NSFileSize];
+					if ([lengthNumber isKindOfClass:[NSNumber class]] && lengthNumber.unsignedLongLongValue <= 64 * 1024) {
+						errorBody = [NSData dataWithContentsOfURL:location options:0 error:NULL];
+					}
+				}
+				id json = errorBody.length ? [NSJSONSerialization JSONObjectWithData:errorBody options:0 error:NULL] : nil;
+				NSString *message = [self errorMessageFromJSON:json] ?: [NSHTTPURLResponse localizedStringForStatusCode:status];
+				resultError = [NSError errorWithDomain:IMApiErrorDomain
+				                                  code:IMApiErrorServer
+				                              userInfo:@{NSLocalizedDescriptionKey: message ?: _(@"The server rejected the download."),
+				                                         IMApiErrorStatusCodeKey: @(status)}];
+			}
+			if (!resultError && !location) {
+				resultError = [NSError errorWithDomain:IMApiErrorDomain
+				                                  code:IMApiErrorDecoding
+				                              userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned no file.")}];
+			}
+			if (!resultError) {
+				NSFileManager *manager = [NSFileManager defaultManager];
+				NSString *parent = destination.URLByDeletingLastPathComponent.path;
+				BOOL prepared = parent.length == 0 || [manager createDirectoryAtPath:parent
+				                                          withIntermediateDirectories:YES
+				                                                           attributes:nil
+				                                                                error:NULL];
+				if (!prepared) {
+					resultError = [NSError errorWithDomain:IMApiErrorDomain
+				                                  code:IMApiErrorDecoding
+				                              userInfo:@{NSLocalizedDescriptionKey: _(@"The downloaded file could not be prepared.")}];
+				} else {
+					NSString *stagingName = [NSString stringWithFormat:@".%@.%@.part",
+					                         destination.lastPathComponent ?: @"download",
+					                         [NSUUID UUID].UUIDString];
+					NSURL *staging = [NSURL fileURLWithPath:[parent stringByAppendingPathComponent:stagingName]];
+					[manager removeItemAtURL:staging error:NULL];
+					BOOL staged = [manager moveItemAtURL:location toURL:staging error:&resultError];
+					if (!staged) {
+						resultError = nil;
+						staged = [manager copyItemAtURL:location toURL:staging error:&resultError];
+						if (staged) [manager removeItemAtURL:location error:NULL];
+					}
+					if (staged) {
+						BOOL destinationExists = [manager fileExistsAtPath:destination.path];
+						if (destinationExists) {
+								staged = [manager replaceItemAtURL:destination
+							                       withItemAtURL:staging
+							                      backupItemName:nil
+							                             options:NSFileManagerItemReplacementUsingNewMetadataOnly
+							                               resultingItemURL:NULL
+							                               error:&resultError];
+						} else {
+							staged = [manager moveItemAtURL:staging toURL:destination error:&resultError];
+						}
+						if (!staged) [manager removeItemAtURL:staging error:NULL];
+					}
+				}
+			}
+			dispatch_async(dispatch_get_main_queue(), ^{
+				completion(resultError ? nil : destination, resultError);
+			});
+		}];
+	[task resume];
+	return task;
+}
+
 #pragma mark - Multipart
 
 static NSString *IMMultipartQuote(NSString *value) {
@@ -318,6 +599,13 @@ static NSString *IMMultipartQuote(NSString *value) {
 
 	NSString *boundary = [NSString stringWithFormat:@"IMBoundary-%@", [NSUUID UUID].UUIDString];
 	NSMutableURLRequest *request = [self requestWithURL:url method:@"POST" body:nil];
+	NSURLSession *session = self.urlSession;
+	if (!session) {
+		[self failJSON:completion withError:[NSError errorWithDomain:IMApiErrorDomain
+		                                                   code:IMApiErrorInvalidURL
+		                                               userInfo:@{NSLocalizedDescriptionKey: _(@"The network client is no longer available.")}]];
+		return nil;
+	}
 	[request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary]
 	    forHTTPHeaderField:@"Content-Type"];
 
@@ -340,7 +628,7 @@ static NSString *IMMultipartQuote(NSString *value) {
 	[body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
 	[body appendData:[[NSString stringWithFormat:@"--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
 
-	NSURLSessionUploadTask *task = [self.urlSession uploadTaskWithRequest:request
+	NSURLSessionUploadTask *task = [session uploadTaskWithRequest:request
 	                                                                fromData:body
 	                                                        completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response, NSError *_Nullable error) {
 		    [self handleData:data response:response error:error completion:completion];

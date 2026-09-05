@@ -40,9 +40,14 @@ FRAMEWORKS := \
 	-framework AVKit \
 	-framework CoreMedia \
 	-framework Security \
+	-framework AuthenticationServices \
+	-framework LocalAuthentication \
 	-framework SystemConfiguration \
 	-framework Network \
-	-framework CoreServices
+	-framework MapKit \
+	-framework CoreLocation \
+	-framework CoreServices \
+	-framework BackgroundTasks
 
 INCLUDE_DIRS := . $(filter-out build/,$(wildcard */))
 CFLAGS := -Wno-deprecated-declarations -Wno-nullability-completeness -Werror \

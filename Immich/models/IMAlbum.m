@@ -10,6 +10,10 @@ static id IMValueOrNil(id value) {
 @property (nonatomic) NSInteger assetCount;
 @property (nonatomic, copy, nullable) NSString *thumbnailAssetId;
 @property (nonatomic, copy, nullable) NSString *order;
+@property (nonatomic, copy) NSString *albumDescription;
+@property (nonatomic) BOOL activityEnabled;
+@property (nonatomic) BOOL shared;
+@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *rolesByUserId;
 @end
 
 @implementation IMAlbum
@@ -34,7 +38,25 @@ static id IMValueOrNil(id value) {
 	if ([order isKindOfClass:[NSString class]] && ([order isEqualToString:@"asc"] || [order isEqualToString:@"desc"])) {
 		album.order = order;
 	}
+	id description = IMValueOrNil(dict[@"description"]);
+	album.albumDescription = [description isKindOfClass:[NSString class]] ? description : @"";
+	id activity = IMValueOrNil(dict[@"isActivityEnabled"]);
+	album.activityEnabled = [activity isKindOfClass:[NSNumber class]] ? [activity boolValue] : YES;
+	id shared = IMValueOrNil(dict[@"shared"]);
+	album.shared = [shared isKindOfClass:[NSNumber class]] ? [shared boolValue] : NO;
+	NSMutableDictionary *roles = [NSMutableDictionary dictionary];
+	NSArray *members = [dict[@"albumUsers"] isKindOfClass:NSArray.class] ? dict[@"albumUsers"] : @[];
+	for (id member in members) {
+		if (![member isKindOfClass:NSDictionary.class] || ![member[@"user"] isKindOfClass:NSDictionary.class]) continue;
+		id userId = member[@"user"][@"id"], role = member[@"role"];
+		if ([userId isKindOfClass:NSString.class] && [role isKindOfClass:NSString.class]) roles[userId] = role;
+	}
+	album.rolesByUserId = roles;
 	return album;
+}
+
+- (NSString *)roleForUserId:(NSString *)userId {
+	return userId.length ? self.rolesByUserId[userId] : nil;
 }
 
 - (instancetype)albumByAdjustingAssetCount:(NSInteger)delta {
@@ -44,6 +66,10 @@ static id IMValueOrNil(id value) {
 	album.assetCount = MAX((NSInteger)0, self.assetCount + delta);
 	album.thumbnailAssetId = self.thumbnailAssetId;
 	album.order = self.order;
+	album.albumDescription = self.albumDescription;
+	album.activityEnabled = self.activityEnabled;
+	album.shared = self.shared;
+	album.rolesByUserId = self.rolesByUserId;
 	return album;
 }
 

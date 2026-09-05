@@ -8,6 +8,7 @@ extern NSErrorDomain const IMForegroundSyncErrorDomain;
 extern NSNotificationName const IMForegroundSyncProgressNotification;
 extern NSNotificationName const IMForegroundSyncDidFinishNotification;
 extern NSString *const IMForegroundSyncErrorUserInfoKey;
+extern NSString *const IMForegroundSyncSessionFingerprintUserInfoKey;
 
 @interface IMForegroundSync : NSObject
 
@@ -22,6 +23,10 @@ extern NSString *const IMForegroundSyncErrorUserInfoKey;
 
 - (void)startWithProgress:(void (^_Nullable)(NSInteger checked, NSInteger total))progress
                 completion:(void (^_Nullable)(NSError *_Nullable error))completion;
+
+- (void)startWithProgress:(void (^_Nullable)(NSInteger checked, NSInteger total))progress
+                completion:(void (^_Nullable)(NSError *_Nullable error))completion
+      ignoreRetryBackoff:(BOOL)ignoreRetryBackoff;
 
 - (void)cancel;
 

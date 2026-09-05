@@ -1,5 +1,6 @@
 #import "AddToAlbumViewController.h"
 #import "IMAlbumApi.h"
+#import "IMSession.h"
 #import "common.h"
 
 static NSString *const kNewAlbumCellId = @"newAlbum";
@@ -66,7 +67,12 @@ static NSString *const kAlbumCellId = @"album";
 			return;
 		}
 		[strongSelf.spinner stopAnimating];
-		strongSelf.albums = albums ?: @[];
+		NSMutableArray *editable = [NSMutableArray array];
+		for (IMAlbum *album in albums) {
+			NSString *role = [album roleForUserId:IMSession.shared.userId];
+			if ([role isEqualToString:@"owner"] || [role isEqualToString:@"editor"]) [editable addObject:album];
+		}
+		strongSelf.albums = editable;
 		[strongSelf.tableView reloadData];
 	}];
 }

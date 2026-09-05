@@ -3,8 +3,12 @@
 #import "IMDatabase.h"
 #import "IMThumbCache.h"
 #import "IMUserApi.h"
+#import "IMUserPreferencesApi.h"
 #import "IMServerApi.h"
+#import "IMSystemConfigApi.h"
+#import "IMBackupQueue.h"
 #import "IMPrefs.h"
+#import "IMLockedPINStore.h"
 #import <Security/Security.h>
 
 static NSString *const kKeychainService = @"com.lns.immich-ios-14.session";
@@ -14,6 +18,17 @@ static NSString *const kDefaultsBaseURL = @"IMSessionBaseURL";
 static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 static NSString *const kDefaultsAuthKind = @"IMSessionAuthKind"; // "apiKey"; absent => Bearer
 static NSString *const kAuthKindAPIKeyValue = @"apiKey";
+
+static void IMClearAccountMediaCaches(void) {
+	NSString *temporary = NSTemporaryDirectory();
+	if (temporary.length == 0) return;
+	NSArray<NSString *> *names = @[ @"IMVideoCache", @"IMLiveCache", @"IMOriginalCache", @"IMShare" ];
+	NSFileManager *manager = [NSFileManager defaultManager];
+	for (NSString *name in names) {
+		NSString *path = [temporary stringByAppendingPathComponent:name];
+		(void)[manager removeItemAtPath:path error:NULL];
+	}
+}
 
 @interface IMSession ()
 @property (nonatomic, copy, nullable) NSURL *baseURL;
@@ -55,6 +70,27 @@ static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 	return self.baseURL != nil && self.accessToken.length > 0;
 }
 
+- (void)reloadFromPersistence {
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	(void)[defaults synchronize];
+	NSString *urlString = [defaults stringForKey:kDefaultsBaseURL];
+	NSString *token = [self keychainToken];
+	NSURL *url = urlString.length > 0 ? [NSURL URLWithString:urlString] : nil;
+	if (url && token.length > 0) {
+		self.baseURL = url;
+		self.accessToken = token;
+		self.userId = [defaults stringForKey:kDefaultsUserId];
+		self.authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
+		    ? IMSessionAuthKindAPIKey
+		    : IMSessionAuthKindBearer;
+	} else {
+		self.baseURL = nil;
+		self.accessToken = nil;
+		self.userId = nil;
+		self.authKind = IMSessionAuthKindBearer;
+	}
+}
+
 - (void)startWithBaseURL:(NSURL *)baseURL
                   secret:(NSString *)secret
                   userId:(nullable NSString *)userId
@@ -91,6 +127,7 @@ static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 }
 
 - (void)logout {
+	[IMLockedPINStore deleteAllRememberedPINs];
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults removeObjectForKey:kDefaultsBaseURL];
 	[defaults removeObjectForKey:kDefaultsUserId];
@@ -103,9 +140,13 @@ static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 	self.authKind = IMSessionAuthKindBearer;
 
 	[[IMDatabase shared] clearAllData];
+	[[IMBackupQueue shared] reset];
 	[[IMThumbCache shared] clearWithCompletion:^{}];
+	IMClearAccountMediaCaches();
 	[IMUserApi clearCachedUser];
+	[IMUserPreferencesApi clearCachedPreferences];
 	[IMServerApi clearCached];
+	[IMSystemConfigApi clearCachedConfig];
 	IMPrefs.shared.backupEnabled = NO;
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];

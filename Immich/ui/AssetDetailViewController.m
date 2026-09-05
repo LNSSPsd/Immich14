@@ -1,6 +1,11 @@
 #import "AssetDetailViewController.h"
 #import "IMAssetApi.h"
+#import "IMAssetManagementApi.h"
 #import "IMApiClient.h"
+#import "IMFaceApi.h"
+#import "AssetFacesViewController.h"
+#import "AssetMetadataEditorViewController.h"
+#import "IMTagApi.h"
 #import "common.h"
 
 @interface AssetDetailSection : NSObject
@@ -21,6 +26,9 @@
 @property (nonatomic, strong, nullable) NSArray<NSString *> *ocrTexts;
 @property (nonatomic) BOOL detailLoaded;
 @property (nonatomic) BOOL ocrLoaded;
+@property (nonatomic) BOOL tagControlsBusy;
+@property (nonatomic) BOOL operationBusy;
+@property (nonatomic, strong) UIBarButtonItem *operationsButton;
 @end
 
 @implementation AssetDetailViewController
@@ -35,9 +43,26 @@
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	self.title = _(@"Info");
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-	                                                                                        target:self
-	                                                                                        action:@selector(doneTapped)];
+	UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+	                                                                          target:self
+	                                                                          action:@selector(doneTapped)];
+	UIBarButtonItem *edit = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemEdit
+	                                                                          target:self
+	                                                                          action:@selector(editTapped)];
+	edit.enabled = NO;
+	UIBarButtonItem *tags = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"tag"] style:UIBarButtonItemStylePlain target:self action:@selector(tagsTapped)];
+	tags.accessibilityLabel = _(@"Manage Tags");
+	tags.enabled = NO;
+	UIBarButtonItem *faces = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"person.2"] style:UIBarButtonItemStylePlain target:self action:@selector(facesTapped)];
+	faces.accessibilityLabel = _(@"Manage Faces");
+	faces.enabled = NO;
+	self.operationsButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gearshape"]
+	                                                          style:UIBarButtonItemStylePlain
+	                                                         target:self
+	                                                         action:@selector(operationsTapped)];
+	self.operationsButton.accessibilityLabel = _(@"Asset operations");
+	self.operationsButton.enabled = NO;
+	self.navigationItem.rightBarButtonItems = @[ done, edit, tags, faces, self.operationsButton ];
 	if (@available(iOS 13.0, *)) {
 		self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
 	} else {
@@ -92,6 +117,7 @@
 	[self.spinner startAnimating];
 	self.detailLoaded = NO;
 	self.ocrLoaded = NO;
+	[self setTagControlsBusy:YES];
 	__weak typeof(self) weakSelf = self;
 	NSString *path = [NSString stringWithFormat:@"/assets/%@", self.assetId];
 	[[IMApiClient shared] GET:path
@@ -120,6 +146,7 @@
 		return;
 	}
 	[self.spinner stopAnimating];
+	[self setTagControlsBusy:NO];
 	if (!self.detail && self.sections.count == 0) {
 		self.errorLabel.hidden = NO; 
 		return;
@@ -209,6 +236,12 @@
 	}
 
 	self.sections = sections;
+	if (self.navigationItem.rightBarButtonItems.count > 1) {
+		self.navigationItem.rightBarButtonItems[1].enabled = (self.rawDetail != nil);
+		if (self.navigationItem.rightBarButtonItems.count > 2) self.navigationItem.rightBarButtonItems[2].enabled = (self.rawDetail != nil);
+		if (self.navigationItem.rightBarButtonItems.count > 3) self.navigationItem.rightBarButtonItems[3].enabled = (self.rawDetail != nil);
+		[self updateOperationButtonState];
+	}
 	[self.tableView reloadData];
 }
 
@@ -266,6 +299,207 @@
 
 - (void)doneTapped {
 	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)editTapped {
+	if (!self.rawDetail) {
+		return;
+	}
+	AssetMetadataEditorViewController *editor = [[AssetMetadataEditorViewController alloc] initWithAssetId:self.assetId
+	                                                                                              initialValues:self.rawDetail];
+	__weak typeof(self) weakSelf = self;
+	editor.onSaved = ^{
+		[weakSelf loadData];
+	};
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
+	[self presentViewController:nav animated:YES completion:nil];
+}
+
+- (void)tagsTapped {
+	if (!self.rawDetail || self.tagControlsBusy) return;
+	[self setTagControlsBusy:YES];
+	__weak typeof(self) weakSelf = self;
+	[IMTagApi allTagsWithCompletion:^(NSArray<IMTag *> *tags, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			AssetDetailViewController *self = weakSelf;
+			if (!self) return;
+			if (error) {
+				[self setTagControlsBusy:NO];
+				UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Tags") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+				[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+				[self presentViewController:alert animated:YES completion:nil];
+				return;
+			}
+			UIAlertController *picker = [UIAlertController alertControllerWithTitle:_(@"Manage Tags") message:tags.count ? nil : _(@"Create a tag in Settings → Tags first.") preferredStyle:UIAlertControllerStyleActionSheet];
+			NSArray *rawTags = [self.rawDetail[@"tags"] isKindOfClass:[NSArray class]] ? self.rawDetail[@"tags"] : @[];
+			NSMutableSet *appliedIds = [NSMutableSet set];
+			for (id item in rawTags) if ([item isKindOfClass:[NSDictionary class]] && [item[@"id"] isKindOfClass:[NSString class]]) [appliedIds addObject:item[@"id"]];
+			for (IMTag *tag in tags) {
+				if (!tag.tagId.length) continue;
+				BOOL applied = [appliedIds containsObject:tag.tagId];
+				NSString *title = [NSString stringWithFormat:applied ? _(@"Remove %@") : _(@"Add %@"), tag.value.length ? tag.value : tag.name];
+				[picker addAction:[UIAlertAction actionWithTitle:title style:applied ? UIAlertActionStyleDestructive : UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+					NSArray *ids = @[ self.assetId ];
+					void (^done)(NSError *) = ^(NSError *requestError) {
+						dispatch_async(dispatch_get_main_queue(), ^{
+							if (requestError) {
+								[self setTagControlsBusy:NO];
+								UIAlertController *failure = [UIAlertController alertControllerWithTitle:_(@"Tags") message:requestError.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+								[failure addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+								[self presentViewController:failure animated:YES completion:nil];
+							} else {
+								[self loadData];
+							}
+						});
+					};
+					if (applied) [IMTagApi untagId:tag.tagId assetIds:ids completion:done];
+					else [IMTagApi tagId:tag.tagId assetIds:ids completion:done];
+				}]];
+			}
+			[picker addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { [self setTagControlsBusy:NO]; }]];
+			if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+				picker.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItems.count > 2 ? self.navigationItem.rightBarButtonItems[2] : nil;
+			}
+			[self presentViewController:picker animated:YES completion:nil];
+		});
+	}];
+}
+
+- (void)facesTapped {
+	if (!self.rawDetail || self.tagControlsBusy || self.assetId.length == 0) return;
+	AssetFacesViewController *faces = [[AssetFacesViewController alloc] initWithAssetId:self.assetId];
+	[self.navigationController pushViewController:faces animated:YES];
+}
+
+#pragma mark - Asset operations
+
+- (void)operationsTapped {
+	if (!self.rawDetail || self.operationBusy) {
+		return;
+	}
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Asset operations")
+	                                                                    message:nil
+	                                                             preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Copy metadata to another asset")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+				[weakSelf presentCopyTargetPrompt];
+			});
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Run an asset job")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+				[weakSelf presentAssetJobPicker];
+			});
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) {
+		sheet.popoverPresentationController.barButtonItem = self.operationsButton;
+	}
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)presentCopyTargetPrompt {
+	if (!self.rawDetail || self.operationBusy) {
+		return;
+	}
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Copy asset metadata")
+	                                                                     message:_(@"Enter the UUID of the target asset. Albums, favorite state, shared links, sidecar, and stack associations will be copied.")
+	                                                              preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Target asset UUID");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+		field.clearButtonMode = UITextFieldViewModeWhileEditing;
+	}];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Copy") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AssetDetailViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *target = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		[strongSelf setOperationBusy:YES];
+		[IMAssetManagementApi copyAssetFromId:strongSelf.assetId
+		                          toAssetId:target
+		                            options:@{ @"albums": @YES, @"favorite": @YES, @"sharedLinks": @YES, @"sidecar": @YES, @"stack": @YES }
+		                         completion:^(BOOL success, NSError *error) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[strongSelf setOperationBusy:NO];
+				if (!success) {
+					[strongSelf showOperationError:error title:_(@"Couldn't copy asset metadata")];
+					return;
+				}
+				[strongSelf showOperationMessage:_(@"Asset metadata copied.") title:_(@"Copy complete")];
+			});
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)presentAssetJobPicker {
+	if (!self.rawDetail || self.operationBusy) {
+		return;
+	}
+	NSArray<NSDictionary *> *jobs = @[
+		@{ @"name": IMAssetJobNameRefreshFaces, @"title": _(@"Refresh faces") },
+		@{ @"name": IMAssetJobNameRefreshMetadata, @"title": _(@"Refresh metadata") },
+		@{ @"name": IMAssetJobNameRegenerateThumbnail, @"title": _(@"Regenerate thumbnail") },
+		@{ @"name": IMAssetJobNameTranscodeVideo, @"title": _(@"Transcode video") },
+	];
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Run asset job") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *job in jobs) {
+		[sheet addAction:[UIAlertAction actionWithTitle:job[@"title"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			AssetDetailViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			[strongSelf setOperationBusy:YES];
+			[IMAssetManagementApi runAssetJobNamed:job[@"name"] forAssetIds:@[ strongSelf.assetId ] completion:^(BOOL success, NSError *error) {
+				dispatch_async(dispatch_get_main_queue(), ^{
+					[strongSelf setOperationBusy:NO];
+					if (!success) {
+						[strongSelf showOperationError:error title:_(@"Couldn't queue asset job")];
+						return;
+					}
+					[strongSelf showOperationMessage:_(@"The job was queued on the server.") title:_(@"Job queued")];
+				});
+			}];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) sheet.popoverPresentationController.barButtonItem = self.operationsButton;
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)setOperationBusy:(BOOL)busy {
+	_operationBusy = busy;
+	[self updateOperationButtonState];
+}
+
+- (void)updateOperationButtonState {
+	self.operationsButton.enabled = self.rawDetail != nil && !self.operationBusy && !self.tagControlsBusy;
+}
+
+- (void)showOperationError:(NSError *)error title:(NSString *)title {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+	                                                                    message:error.localizedDescription ?: _(@"The server rejected this operation.")
+	                                                             preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showOperationMessage:(NSString *)message title:(NSString *)title {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)setTagControlsBusy:(BOOL)busy {
+	_tagControlsBusy = busy;
+	if (self.navigationItem.rightBarButtonItems.count > 2) self.navigationItem.rightBarButtonItems[2].enabled = !busy && self.rawDetail != nil;
+	[self updateOperationButtonState];
 }
 
 @end

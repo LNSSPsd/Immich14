@@ -1,4 +1,5 @@
 #import "IMOcrLine.h"
+#import <math.h>
 
 @interface IMOcrLine ()
 @property (nonatomic, copy) NSString *text;
@@ -7,13 +8,35 @@
 
 @implementation IMOcrLine
 
+static BOOL IMOcrFiniteNumber(id value) {
+	if (![value isKindOfClass:[NSNumber class]]) {
+		return NO;
+	}
+	double number = [value doubleValue];
+	return isfinite(number);
+}
+
 + (nullable instancetype)lineWithDictionary:(NSDictionary *)dict {
 	if (![dict isKindOfClass:[NSDictionary class]]) {
 		return nil;
 	}
 	NSString *text = dict[@"text"];
-	if (![text isKindOfClass:[NSString class]] || text.length == 0) {
+	NSString *assetId = dict[@"assetId"];
+	NSString *lineId = dict[@"id"];
+	if (![text isKindOfClass:[NSString class]] ||
+	    ![assetId isKindOfClass:[NSString class]] || assetId.length == 0 ||
+	    ![lineId isKindOfClass:[NSString class]] || lineId.length == 0) {
 		return nil;
+	}
+	for (NSString *key in @[ @"x1", @"x2", @"x3", @"x4", @"y1", @"y2", @"y3", @"y4" ]) {
+		if (!IMOcrFiniteNumber(dict[key])) {
+			return nil;
+		}
+	}
+	for (NSString *key in @[ @"boxScore", @"textScore" ]) {
+		if (![dict[key] isKindOfClass:[NSNumber class]] || !isfinite([dict[key] doubleValue])) {
+			return nil;
+		}
 	}
 
 	double xs[4] = {

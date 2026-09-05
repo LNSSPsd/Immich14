@@ -1,7 +1,10 @@
 #import "IMForegroundSync.h"
 #import "IMPhotoLibrary.h"
 #import "IMAssetApi.h"
+#import "IMBackupQueue.h"
+#import "IMBackupDaemon.h"
 #import "IMPrefs.h"
+#import "IMSession.h"
 #import "common.h"
 #import <Photos/Photos.h>
 #import <Network/Network.h>
@@ -10,6 +13,7 @@ NSErrorDomain const IMForegroundSyncErrorDomain = @"IMForegroundSyncErrorDomain"
 NSNotificationName const IMForegroundSyncProgressNotification = @"IMForegroundSyncProgressNotification";
 NSNotificationName const IMForegroundSyncDidFinishNotification = @"IMForegroundSyncDidFinishNotification";
 NSString *const IMForegroundSyncErrorUserInfoKey = @"error";
+NSString *const IMForegroundSyncSessionFingerprintUserInfoKey = @"sessionFingerprint";
 
 typedef NS_ENUM(NSInteger, IMForegroundSyncErrorCode) {
 	IMForegroundSyncErrorPhotoAccessDenied = 1,
@@ -38,6 +42,21 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	return [formatter stringFromDate:date ?: [NSDate date]];
 }
 
+static NSString *IMSyncSessionFingerprint(void) {
+	IMSession *session = IMSession.shared;
+	return [NSString stringWithFormat:@"%@|%@|%ld|%lu",
+	                                session.baseURL.absoluteString ?: @"",
+	                                session.userId ?: @"",
+	                                (long)session.authKind,
+	                                (unsigned long)session.accessToken.hash];
+}
+
+static NSError *IMSyncSessionChangedError(void) {
+	return [NSError errorWithDomain:IMForegroundSyncErrorDomain
+	                            code:IMForegroundSyncErrorCancelled
+	                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Session changed — sync cancelled.") }];
+}
+
 @interface IMForegroundSync () <PHPhotoLibraryChangeObserver>
 @property (nonatomic) dispatch_queue_t workQueue;
 @property (nonatomic) nw_path_monitor_t pathMonitor;
@@ -59,6 +78,21 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 @property (nonatomic, copy, nullable) void (^progressBlock)(NSInteger checked, NSInteger total);
 @property (nonatomic, copy, nullable) void (^completionBlock)(NSError *_Nullable error);
 @property (nonatomic) BOOL cancelled;
+@property (nonatomic) BOOL ignoreRetryBackoff;
+@property (nonatomic, copy, nullable) NSString *runSessionFingerprint;
+@property (nonatomic, strong, nullable) NSObject *runToken;
+- (BOOL)ensureCurrentRunToken:(NSObject *)token;
+- (BOOL)ensureMutableRunToken:(NSObject *)token;
+- (void)processNextForToken:(NSObject *)token;
+- (void)flushBatchThen:(void (^)(void))next token:(NSObject *)token;
+- (void)uploadDeviceAssetIds:(NSArray<NSString *> *)deviceAssetIds
+                    assetsById:(NSDictionary<NSString *, PHAsset *> *)assetsById
+                          then:(void (^)(void))then
+                         token:(NSObject *)token;
+- (void)fetchAndUploadLiveVideoForAsset:(PHAsset *)asset
+                          deviceAssetId:(NSString *)deviceAssetId
+                             completion:(void (^)(NSString *_Nullable livePhotoVideoId))completion
+                                  token:(NSObject *)token;
 @end
 
 @implementation IMForegroundSync
@@ -103,9 +137,6 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 }
 
 - (void)appWillResignActive {
-	if (self.running) {
-		[self cancel];
-	}
 }
 
 #pragma mark - Auto-trigger (backupEnabled only)
@@ -133,7 +164,7 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 		if (!strongSelf || strongSelf.running || !IMPrefs.shared.backupEnabled) {
 			return;
 		}
-		[strongSelf startWithProgress:nil completion:nil];
+		[IMBackupDaemon.shared runScheduled];
 	});
 	self.pendingAutoCheck = block;
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kAutoCheckDebounceSeconds * NSEC_PER_SEC), dispatch_get_main_queue(), block);
@@ -143,6 +174,12 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 
 - (void)startWithProgress:(void (^)(NSInteger checked, NSInteger total))progress
                 completion:(void (^)(NSError *_Nullable error))completion {
+	[self startWithProgress:progress completion:completion ignoreRetryBackoff:NO];
+}
+
+- (void)startWithProgress:(void (^)(NSInteger checked, NSInteger total))progress
+                completion:(void (^)(NSError *_Nullable error))completion
+      ignoreRetryBackoff:(BOOL)ignoreRetryBackoff {
 	if (self.running) {
 		return;
 	}
@@ -156,9 +193,14 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	self.pendingChangedBuckets = [NSMutableSet set];
 	self.progressBlock = progress;
 	self.completionBlock = completion;
+	self.ignoreRetryBackoff = ignoreRetryBackoff;
+	self.runSessionFingerprint = IMSyncSessionFingerprint();
+	NSString *runSessionFingerprint = [self.runSessionFingerprint copy];
+	NSObject *runToken = [[NSObject alloc] init];
+	self.runToken = runToken;
 	[[IMDatabase shared] resetUploadingStates];
 
-	if (IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
+	if (IMPrefs.shared.backupEnabled && IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
 		[self finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
 		                                            code:IMForegroundSyncErrorNoWifi
 		                                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Waiting for Wi-Fi (Preferences > Wi-Fi Only Upload is on).") }]];
@@ -171,6 +213,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 		if (!strongSelf) {
 			return;
 		}
+		if (![strongSelf ensureCurrentRunToken:runToken]) {
+			return;
+		}
 		if (!granted) {
 			[strongSelf finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
 			                                                  code:IMForegroundSyncErrorPhotoAccessDenied
@@ -179,9 +224,35 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 		}
 		dispatch_async(strongSelf.workQueue, ^{
 			NSArray<PHAsset *> *assets = [[IMPhotoLibrary shared] allAssets];
+			if (runSessionFingerprint.length == 0 ||
+			    ![runSessionFingerprint isEqualToString:IMSyncSessionFingerprint()]) {
+				dispatch_async(dispatch_get_main_queue(), ^{
+					[strongSelf ensureCurrentRunToken:runToken];
+				});
+				return;
+			}
+			BOOL fullPhotoAuthorization = NO;
+			if (@available(iOS 14.0, *)) {
+				fullPhotoAuthorization = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite] == PHAuthorizationStatusAuthorized;
+			} else {
+				fullPhotoAuthorization = [PHPhotoLibrary authorizationStatus] == PHAuthorizationStatusAuthorized;
+			}
+			if (fullPhotoAuthorization && assets) {
+				NSMutableSet<NSString *> *currentAssetIDs = [NSMutableSet setWithCapacity:assets.count];
+				for (PHAsset *asset in assets) {
+					NSString *localIdentifier = asset.localIdentifier;
+					if (localIdentifier.length > 0) {
+						[currentAssetIDs addObject:localIdentifier];
+					}
+				}
+				[[IMBackupQueue shared] pruneDeviceAssetIdsNotInSet:currentAssetIDs];
+			}
 			dispatch_async(dispatch_get_main_queue(), ^{
 				typeof(self) s2 = weakSelf;
 				if (!s2) {
+					return;
+				}
+				if (![s2 ensureCurrentRunToken:runToken]) {
 					return;
 				}
 				s2.assets = assets;
@@ -189,28 +260,89 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 				s2.nextIndex = 0;
 				s2.batchItems = [NSMutableArray array];
 				s2.batchAssetsById = [NSMutableDictionary dictionary];
-				[s2 processNext];
+				[s2 processNextForToken:runToken];
 			});
 		});
 	}];
 }
 
 - (void)cancel {
+	if (![NSThread isMainThread]) {
+		__weak typeof(self) weakSelf = self;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[weakSelf cancel];
+		});
+		return;
+	}
+	if (!self.running) {
+		return;
+	}
 	self.cancelled = YES;
+	NSObject *runToken = self.runToken;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (runToken == self.runToken && self.running) {
+			[self processNextForToken:runToken];
+		}
+	});
+}
+
+- (BOOL)ensureCurrentRunToken:(NSObject *)runToken {
+	if (!self.running || runToken != self.runToken) {
+		return NO;
+	}
+	NSString *captured = self.runSessionFingerprint;
+	if (captured.length > 0 && [captured isEqualToString:IMSyncSessionFingerprint()]) {
+		return YES;
+	}
+	self.cancelled = YES;
+	[self finishWithError:IMSyncSessionChangedError()];
+	return NO;
+}
+
+- (BOOL)ensureMutableRunToken:(NSObject *)runToken {
+	if (![self ensureCurrentRunToken:runToken]) {
+		return NO;
+	}
+	if (self.cancelled) {
+		[self finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
+		                                            code:IMForegroundSyncErrorCancelled
+		                                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Cancelled.") }]];
+		return NO;
+	}
+	return YES;
 }
 
 - (void)finishWithError:(nullable NSError *)error {
+	if (!self.running) {
+		return;
+	}
+	NSString *sessionFingerprint = self.runSessionFingerprint;
+	BOOL sessionMatches = sessionFingerprint.length > 0 &&
+	    [sessionFingerprint isEqualToString:IMSyncSessionFingerprint()];
 	self.running = NO;
-	[self postPendingBucketChanges];
+	if (sessionMatches) {
+		[self postPendingBucketChanges];
+	} else {
+		[self.pendingChangedBuckets removeAllObjects];
+	}
 	void (^completion)(NSError *_Nullable) = self.completionBlock;
 	self.completionBlock = nil;
 	self.progressBlock = nil;
+	self.runSessionFingerprint = nil;
+	self.runToken = nil;
 	if (completion) {
 		completion(error);
 	}
+	NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithCapacity:2];
+	if (error) {
+		userInfo[IMForegroundSyncErrorUserInfoKey] = error;
+	}
+	if (sessionFingerprint.length > 0) {
+		userInfo[IMForegroundSyncSessionFingerprintUserInfoKey] = sessionFingerprint;
+	}
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMForegroundSyncDidFinishNotification
 	                                                    object:self
-	                                                  userInfo:error ? @{ IMForegroundSyncErrorUserInfoKey: error } : nil];
+	                                                  userInfo:userInfo.count > 0 ? userInfo : nil];
 }
 
 - (void)postPendingBucketChanges {
@@ -226,14 +358,17 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 
 #pragma mark - Sequential scan
 
-- (void)processNext {
+- (void)processNextForToken:(NSObject *)runToken {
+	if (![self ensureCurrentRunToken:runToken]) {
+		return;
+	}
 	if (self.cancelled) {
 		[self finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
 		                                            code:IMForegroundSyncErrorCancelled
 		                                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Cancelled.") }]];
 		return;
 	}
-	if (IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
+	if (IMPrefs.shared.backupEnabled && IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
 		[self finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
 		                                            code:IMForegroundSyncErrorNoWifi
 		                                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Wi-Fi dropped — sync paused (Preferences > Wi-Fi Only Upload is on).") }]];
@@ -245,7 +380,7 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 			__weak typeof(self) weakSelf = self;
 			[self flushBatchThen:^{
 				[weakSelf finishWithError:nil];
-			}];
+			} token:runToken];
 		} else {
 			[self finishWithError:nil];
 		}
@@ -256,12 +391,29 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	self.nextIndex++;
 
 	NSString *deviceAssetId = asset.localIdentifier;
-	if ([[IMDatabase shared] syncStateForDeviceAssetId:deviceAssetId] == IMSyncStateSynced) {
+	IMSyncState syncState = [[IMDatabase shared] syncStateForDeviceAssetId:deviceAssetId];
+	if (syncState == IMSyncStateSynced) {
 		self.checkedCount++;
 		self.syncedCount++;
 		[self reportProgress];
 		dispatch_async(dispatch_get_main_queue(), ^{
-			[self processNext];
+			if ([self ensureCurrentRunToken:runToken]) {
+				[self processNextForToken:runToken];
+			}
+		});
+		return;
+	}
+	NSDate *retryAt = (!self.ignoreRetryBackoff && syncState == IMSyncStateLocalOnly)
+	    ? [[IMBackupQueue shared] nextAttemptDateForDeviceAssetId:deviceAssetId]
+	    : nil;
+	if (retryAt && [retryAt compare:[NSDate date]] == NSOrderedDescending) {
+		self.checkedCount++;
+		self.pendingUploadCount++;
+		[self reportProgress];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if ([self ensureCurrentRunToken:runToken]) {
+				[self processNextForToken:runToken];
+			}
 		});
 		return;
 	}
@@ -274,6 +426,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 			    if (!strongSelf) {
 				    return;
 			    }
+			    if (![strongSelf ensureCurrentRunToken:runToken]) {
+				    return;
+			    }
 			    if (checksums.count > 0) {
 				    [checksums enumerateObjectsUsingBlock:^(NSString *checksum, NSUInteger idx, BOOL *stop) {
 					    NSString *itemId = checksums.count > 1
@@ -282,29 +437,43 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 					    [strongSelf.batchItems addObject:@{ @"id": itemId, @"checksum": checksum }];
 				    }];
 				    strongSelf.batchAssetsById[deviceAssetId] = asset;
-			    } else {
-				    NSLog(@"IMForegroundSync: checksum failed for %@: %@", deviceAssetId, error);
-				    [[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-				    strongSelf.checkedCount++;
+				} else {
+					NSLog(@"IMForegroundSync: checksum failed for %@: %@", deviceAssetId, error);
+					[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+					if (IMPrefs.shared.backupEnabled) {
+						[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:error];
+					}
+					strongSelf.checkedCount++;
 				    strongSelf.pendingUploadCount++;
 			    }
 
 			    if (strongSelf.batchItems.count >= kBatchSize) {
 				    [strongSelf flushBatchThen:^{
-					    [strongSelf processNext];
-				    }];
+					    [strongSelf processNextForToken:runToken];
+				    } token:runToken];
 			    } else {
-				    [strongSelf processNext];
+				    [strongSelf processNextForToken:runToken];
 			    }
 		    });
 	    }];
 }
 
-- (void)flushBatchThen:(void (^)(void))next {
+- (void)flushBatchThen:(void (^)(void))next token:(NSObject *)runToken {
+	if (![self ensureCurrentRunToken:runToken]) {
+		return;
+	}
 	NSArray<NSDictionary<NSString *, NSString *> *> *items = self.batchItems;
 	NSDictionary<NSString *, PHAsset *> *assetsById = self.batchAssetsById;
 	self.batchItems = [NSMutableArray array];
 	self.batchAssetsById = [NSMutableDictionary dictionary];
+	if (IMPrefs.shared.backupEnabled) {
+		NSMutableOrderedSet<NSString *> *queuedDeviceAssetIDs = [NSMutableOrderedSet orderedSet];
+		for (NSDictionary<NSString *, NSString *> *item in items) {
+			NSString *deviceAssetId = IMDeviceAssetIdFromItemId(item[@"id"]);
+			if (deviceAssetId.length > 0) [queuedDeviceAssetIDs addObject:deviceAssetId];
+		}
+		[[IMBackupQueue shared] enqueueDeviceAssetIds:queuedDeviceAssetIDs.array];
+	}
 
 	__weak typeof(self) weakSelf = self;
 	[IMAssetApi bulkUploadCheckWithItems:items
@@ -315,12 +484,28 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 		    if (!strongSelf) {
 			    return;
 		    }
-
-		    if (error || !actionsById) {
-			    [strongSelf finishWithError:error ?: [NSError errorWithDomain:IMForegroundSyncErrorDomain
-			                                                              code:IMForegroundSyncErrorCheckFailed
-			                                                          userInfo:@{ NSLocalizedDescriptionKey: _(@"Server dedup check failed.") }]];
+		    if (![strongSelf ensureCurrentRunToken:runToken]) {
 			    return;
+		    }
+
+			if (error || !actionsById) {
+				NSError *checkError = error ?: [NSError errorWithDomain:IMForegroundSyncErrorDomain
+				                                                              code:IMForegroundSyncErrorCheckFailed
+				                                                          userInfo:@{ NSLocalizedDescriptionKey: _(@"Server dedup check failed.") }];
+				if (IMPrefs.shared.backupEnabled) {
+					NSMutableOrderedSet<NSString *> *failedDeviceAssetIDs = [NSMutableOrderedSet orderedSet];
+					for (NSDictionary<NSString *, NSString *> *item in items) {
+						NSString *deviceAssetId = IMDeviceAssetIdFromItemId(item[@"id"]);
+						if (deviceAssetId.length > 0) {
+							[failedDeviceAssetIDs addObject:deviceAssetId];
+						}
+					}
+					for (NSString *deviceAssetId in failedDeviceAssetIDs) {
+						[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:checkError];
+					}
+				}
+				[strongSelf finishWithError:checkError];
+				return;
 		    }
 
 		    NSMutableOrderedSet<NSString *> *orderedAssetIds = [NSMutableOrderedSet orderedSet];
@@ -350,40 +535,51 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 		    }
 
 		    NSMutableArray<NSString *> *needsUpload = [NSMutableArray array];
+		    NSMutableArray<NSString *> *succeededDeviceAssetIDs = [NSMutableArray array];
 		    for (NSString *deviceAssetId in orderedAssetIds) {
 			    strongSelf.checkedCount++;
-			    if ([matchedByAsset[deviceAssetId] boolValue]) {
+				if ([matchedByAsset[deviceAssetId] boolValue]) {
 				    [[IMDatabase shared] setSyncState:IMSyncStateSynced
 				                               assetId:matchedAssetIdByAsset[deviceAssetId]
 				                     forDeviceAssetId:deviceAssetId];
-				    strongSelf.syncedCount++;
-			    } else if (IMPrefs.shared.backupEnabled) {
-				    [[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-				    [needsUpload addObject:deviceAssetId];
+					strongSelf.syncedCount++;
+					[succeededDeviceAssetIDs addObject:deviceAssetId];
+				} else if (IMPrefs.shared.backupEnabled) {
+					[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+					[needsUpload addObject:deviceAssetId];
 			    } else {
 				    [[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
 				    strongSelf.pendingUploadCount++;
 			    }
 		    }
+		    [[IMBackupQueue shared] markSucceededDeviceAssetIds:succeededDeviceAssetIDs];
 
 		    [strongSelf uploadDeviceAssetIds:needsUpload
 		                          assetsById:assetsById
 		                                then:^{
+			    if (![strongSelf ensureCurrentRunToken:runToken]) {
+				    return;
+			    }
 			    [strongSelf postPendingBucketChanges];
 			    [strongSelf reportProgress];
 			    next();
-		    }];
+		    }
+		                               token:runToken];
 	    }];
 }
 
 - (void)uploadDeviceAssetIds:(NSArray<NSString *> *)deviceAssetIds
                     assetsById:(NSDictionary<NSString *, PHAsset *> *)assetsById
-                          then:(void (^)(void))then {
+                          then:(void (^)(void))then
+                         token:(NSObject *)runToken {
+	if (![self ensureMutableRunToken:runToken]) {
+		return;
+	}
 	if (deviceAssetIds.count == 0 || self.cancelled) {
 		then();
 		return;
 	}
-	if (IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
+	if (IMPrefs.shared.backupEnabled && IMPrefs.shared.wifiOnlyUpload && !self.wifiAvailable) {
 		for (NSString *queuedId in deviceAssetIds) {
 			[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:queuedId];
 			self.pendingUploadCount++;
@@ -397,8 +593,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	PHAsset *asset = assetsById[deviceAssetId];
 	if (!asset) {
 		[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+		[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:nil];
 		self.pendingUploadCount++;
-		[self uploadDeviceAssetIds:rest assetsById:assetsById then:then];
+		[self uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
 		return;
 	}
 
@@ -409,14 +606,18 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	                                    completion:^(NSData *_Nullable data, NSString *_Nullable filename, NSError *_Nullable error) {
 		    dispatch_async(dispatch_get_main_queue(), ^{
 			    typeof(self) strongSelf = weakSelf;
-			    if (!strongSelf) {
-				    return;
-			    }
-			    if (!data || !filename) {
+		    if (!strongSelf) {
+			    return;
+		    }
+			    if (![strongSelf ensureMutableRunToken:runToken]) {
+			    return;
+		    }
+				if (!data || !filename) {
 				    NSLog(@"IMForegroundSync: read failed for upload %@: %@", deviceAssetId, error);
-				    [[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-				    strongSelf.pendingUploadCount++;
-				    [strongSelf uploadDeviceAssetIds:rest assetsById:assetsById then:then];
+					[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+					[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:error];
+					strongSelf.pendingUploadCount++;
+				    [strongSelf uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
 				    return;
 			    }
 			    [strongSelf fetchAndUploadLiveVideoForAsset:asset
@@ -426,6 +627,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 				    if (!s3) {
 					    return;
 				    }
+				    if (![s3 ensureMutableRunToken:runToken]) {
+					    return;
+				    }
 				    [IMAssetApi uploadAssetData:data
 				                        filename:filename
 				                   fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
@@ -433,31 +637,41 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 				                livePhotoVideoId:livePhotoVideoId
 				                      completion:^(NSString *_Nullable uploadedAssetId, NSError *_Nullable uploadError) {
 					    typeof(self) s2 = weakSelf;
-					    if (!s2) {
-						    return;
-					    }
-					    if (uploadedAssetId) {
-						    [[IMDatabase shared] setSyncState:IMSyncStateSynced assetId:uploadedAssetId forDeviceAssetId:deviceAssetId];
-						    s2.syncedCount++;
+							    if (!s2) {
+								    return;
+							    }
+							    if (![s2 ensureMutableRunToken:runToken]) {
+								    return;
+							    }
+							if (uploadedAssetId) {
+								[[IMDatabase shared] setSyncState:IMSyncStateSynced assetId:uploadedAssetId forDeviceAssetId:deviceAssetId];
+								[[IMBackupQueue shared] markSucceededDeviceAssetId:deviceAssetId];
+								s2.syncedCount++;
 						    s2.uploadedCount++;
 						    if (asset.creationDate) {
 							    [s2.pendingChangedBuckets addObject:IMTimeBucketKeyForDate(asset.creationDate)];
 						    }
-					    } else {
+							} else {
 						    NSLog(@"IMForegroundSync: upload failed for %@: %@", deviceAssetId, uploadError);
-						    [[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-						    s2.pendingUploadCount++;
+								[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+								[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:uploadError];
+								s2.pendingUploadCount++;
 					    }
-					    [s2 uploadDeviceAssetIds:rest assetsById:assetsById then:then];
-				    }];
-			    }];
+						    [s2 uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
+					    }];
+					    }
+					                                  token:runToken];
 		    });
 	    }];
 }
 
 - (void)fetchAndUploadLiveVideoForAsset:(PHAsset *)asset
                           deviceAssetId:(NSString *)deviceAssetId
-                             completion:(void (^)(NSString *_Nullable livePhotoVideoId))completion {
+                             completion:(void (^)(NSString *_Nullable livePhotoVideoId))completion
+                                  token:(NSObject *)runToken {
+	if (![self ensureMutableRunToken:runToken]) {
+		return;
+	}
 	if (!(asset.mediaSubtypes & PHAssetMediaSubtypePhotoLive)) {
 		completion(nil);
 		return;
@@ -465,6 +679,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 	[[IMPhotoLibrary shared] pairedLivePhotoVideoForAsset:asset
 	                                            completion:^(NSData *_Nullable data, NSString *_Nullable filename, NSError *_Nullable error) {
 		    dispatch_async(dispatch_get_main_queue(), ^{
+			    if (![self ensureMutableRunToken:runToken]) {
+				    return;
+			    }
 			    if (!data) {
 				    if (error) {
 					    NSLog(@"IMForegroundSync: paired video read failed for %@: %@", deviceAssetId, error);
@@ -478,6 +695,9 @@ static NSString *IMISO8601StringFromDate(NSDate *_Nullable date) {
 			                  fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
 			                livePhotoVideoId:nil
 			                      completion:^(NSString *_Nullable videoAssetId, NSError *_Nullable uploadError) {
+				    if (![self ensureMutableRunToken:runToken]) {
+					    return;
+				    }
 				    if (!videoAssetId) {
 					    NSLog(@"IMForegroundSync: paired video upload failed for %@: %@", deviceAssetId, uploadError);
 				    }

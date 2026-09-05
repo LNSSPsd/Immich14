@@ -10,6 +10,8 @@ static id IMValueOrNil(id value) {
 @property (nonatomic, copy) NSString *originalFileName;
 @property (nonatomic) NSInteger width;
 @property (nonatomic) NSInteger height;
+@property (nonatomic) NSInteger exifWidth;
+@property (nonatomic) NSInteger exifHeight;
 @property (nonatomic, copy, nullable) NSString *fileCreatedAt;
 @property (nonatomic, copy, nullable) NSString *cameraMake;
 @property (nonatomic, copy, nullable) NSString *cameraModel;
@@ -40,6 +42,8 @@ static id IMValueOrNil(id value) {
 
 		id exifValue = IMValueOrNil(dict[@"exifInfo"]);
 		NSDictionary *exif = [exifValue isKindOfClass:[NSDictionary class]] ? exifValue : nil;
+		_exifWidth = [IMValueOrNil(exif[@"exifImageWidth"]) integerValue];
+		_exifHeight = [IMValueOrNil(exif[@"exifImageHeight"]) integerValue];
 		_cameraMake = IMValueOrNil(exif[@"make"]);
 		_cameraModel = IMValueOrNil(exif[@"model"]);
 		_lensModel = IMValueOrNil(exif[@"lensModel"]);

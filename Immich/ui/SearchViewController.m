@@ -1,10 +1,12 @@
 #import "SearchViewController.h"
 #import "IMSearchApi.h"
+#import "IMApiClient.h"
 #import "TimelineCell.h"
 #import "IMPersonCell.h"
 #import "IMPlaceCell.h"
 #import "AssetGridViewController.h"
 #import "AssetViewController.h"
+#import "ExploreViewController.h"
 #import "common.h"
 
 typedef NS_ENUM(NSInteger, IMSearchMode) {
@@ -77,8 +79,11 @@ typedef NS_ENUM(NSInteger, IMSearchScope) {
 @property (nonatomic) NSInteger resultNextPage;
 @property (nonatomic) NSInteger peopleNextPage;
 @property (nonatomic) BOOL peopleLoading;
+@property (nonatomic) NSInteger peopleGeneration;
 @property (nonatomic, strong, nullable) NSURLSessionTask *browseTask;
 @property (nonatomic, copy, nullable) void (^browseRetryAction)(void);
+@property (nonatomic, strong, nullable) NSURLSessionTask *discoveryTask;
+@property (nonatomic) NSInteger discoveryGeneration;
 @end
 
 @implementation SearchViewController
@@ -117,6 +122,10 @@ static const CGFloat kScopeBarHeight = 44;
 	self.searchController.searchBar.placeholder = _(@"Search your photos");
 	self.navigationItem.searchController = self.searchController;
 	self.navigationItem.hidesSearchBarWhenScrolling = NO;
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Explore")
+	                                                                            style:UIBarButtonItemStylePlain
+	                                                                           target:self
+	                                                                           action:@selector(showSearchTools)];
 	self.definesPresentationContext = YES;
 
 	UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
@@ -205,17 +214,37 @@ static const CGFloat kScopeBarHeight = 44;
 	[self.collectionView reloadData];
 
 	[self loadBrowseData];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(peopleDidChange:) name:IMPeopleDidChangeNotification object:nil];
 }
 
 #pragma mark - Browse data
 
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[self.debounceTimer invalidate];
+	[self.searchTask cancel];
+	[self.browseTask cancel];
+	[self.discoveryTask cancel];
+}
+
+- (void)peopleDidChange:(NSNotification *)notification {
+	self.people = [IMSearchApi cachedPeople];
+	self.peopleNextPage = 0;
+	if (self.mode == IMSearchModeBrowse) [self.collectionView reloadData];
+	[self loadBrowseData];
+}
+
 - (void)loadBrowseData {
+	NSInteger generation = ++self.peopleGeneration;
+	self.peopleLoading = YES;
 	__weak typeof(self) weakSelf = self;
 	[IMSearchApi peopleAtPage:1 completion:^(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf || error || !people) {
+		if (!strongSelf || generation != strongSelf.peopleGeneration) {
 			return;
 		}
+		strongSelf.peopleLoading = NO;
+		if (error || !people) return;
 		strongSelf.people = people;
 		strongSelf.peopleNextPage = hasNextPage ? 2 : 0;
 		if (strongSelf.mode == IMSearchModeBrowse) {
@@ -242,10 +271,11 @@ static const CGFloat kScopeBarHeight = 44;
 	}
 	self.peopleLoading = YES;
 	NSInteger page = self.peopleNextPage;
+	NSInteger generation = self.peopleGeneration;
 	__weak typeof(self) weakSelf = self;
 	[IMSearchApi peopleAtPage:page completion:^(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf) {
+		if (!strongSelf || generation != strongSelf.peopleGeneration) {
 			return;
 		}
 		strongSelf.peopleLoading = NO;
@@ -260,11 +290,200 @@ static const CGFloat kScopeBarHeight = 44;
 	}];
 }
 
+#pragma mark - Discovery tools
+
+- (void)showSearchTools {
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Explore")
+	                                                                  message:_(@"Find assets using the server's discovery indexes.")
+	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Random photos")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadDiscoveryAssetsWithTitle:_(@"Random photos") criteria:@{ @"size": @100 } large:NO];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Explore categories")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[self.navigationController pushViewController:[[ExploreViewController alloc] init] animated:YES];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Largest files")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadDiscoveryAssetsWithTitle:_(@"Largest files") criteria:@{ @"size": @100 } large:YES];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Matching asset count")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadSearchStatistics];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Location suggestions")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadCitySuggestions];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) {
+		sheet.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
+	}
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)showDiscoveryError:(NSError *)error title:(NSString *)title {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+	                                                                 message:error.localizedDescription ?: _(@"The server could not complete this search.")
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	if (self.viewIfLoaded.window) {
+		[self presentViewController:alert animated:YES completion:nil];
+	}
+}
+
+- (void)loadDiscoveryAssetsWithTitle:(NSString *)title
+	                         criteria:(NSDictionary<NSString *, id> *)criteria
+	                            large:(BOOL)large {
+	[self.discoveryTask cancel];
+	NSInteger generation = ++self.discoveryGeneration;
+	[self.activityIndicator startAnimating];
+	__weak typeof(self) weakSelf = self;
+	void (^completion)(NSArray<IMAsset *> *, NSError *) = ^(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error) {
+		SearchViewController *strongSelf = weakSelf;
+		if (!strongSelf || generation != strongSelf.discoveryGeneration) {
+			return;
+		}
+		strongSelf.discoveryTask = nil;
+		[strongSelf.activityIndicator stopAnimating];
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+			return;
+		}
+		if (error || !assets) {
+			[strongSelf showDiscoveryError:error title:title];
+			return;
+		}
+		AssetGridViewController *grid = [AssetGridViewController gridWithTitle:title assets:assets];
+		[strongSelf.navigationController pushViewController:grid animated:YES];
+	};
+	if (large) {
+		self.discoveryTask = [IMSearchApi largeAssetsWithCriteria:criteria completion:completion];
+	} else {
+		self.discoveryTask = [IMSearchApi randomAssetsWithCriteria:criteria completion:completion];
+	}
+}
+
+- (void)loadSearchStatistics {
+	[self.discoveryTask cancel];
+	NSInteger generation = ++self.discoveryGeneration;
+	[self.activityIndicator startAnimating];
+	NSString *query = self.lastQuery;
+	NSDictionary *criteria = @{};
+	BOOL exactFilter = NO;
+	if (query.length > 0) {
+		switch (self.scopeControl.selectedSegmentIndex) {
+			case IMSearchScopeOcr: criteria = @{ @"ocr": query }; exactFilter = YES; break;
+			case IMSearchScopeDescription: criteria = @{ @"description": query }; exactFilter = YES; break;
+			default: break;
+		}
+	}
+	__weak typeof(self) weakSelf = self;
+	self.discoveryTask = [IMSearchApi searchStatisticsWithCriteria:criteria completion:^(IMSearchStatistics *_Nullable statistics, NSError *_Nullable error) {
+		SearchViewController *strongSelf = weakSelf;
+		if (!strongSelf || generation != strongSelf.discoveryGeneration) {
+			return;
+		}
+		strongSelf.discoveryTask = nil;
+		[strongSelf.activityIndicator stopAnimating];
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+			return;
+		}
+		if (error || !statistics) {
+			[strongSelf showDiscoveryError:error title:_(@"Asset count")];
+			return;
+		}
+		NSString *message;
+		if (exactFilter) {
+			message = [NSString stringWithFormat:_(@"%@ matching assets"), @(statistics.total)];
+		} else if (query.length > 0) {
+			message = [NSString stringWithFormat:_(@"%@ assets in your library (this search scope has no count filter)"), @(statistics.total)];
+		} else {
+			message = [NSString stringWithFormat:_(@"%@ assets in your library"), @(statistics.total)];
+		}
+		if (!strongSelf.viewIfLoaded.window) {
+			return;
+		}
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Asset count") message:message preferredStyle:UIAlertControllerStyleAlert];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		[strongSelf presentViewController:alert animated:YES completion:nil];
+	}];
+}
+
+- (void)loadCitySuggestions {
+	[self.discoveryTask cancel];
+	NSInteger generation = ++self.discoveryGeneration;
+	[self.activityIndicator startAnimating];
+	NSString *query = self.lastQuery.lowercaseString;
+	__weak typeof(self) weakSelf = self;
+	self.discoveryTask = [IMSearchApi searchSuggestionsForType:IMSearchSuggestionTypeCity
+	                                                    country:nil
+	                                                       state:nil
+	                                                       make:nil
+	                                                      model:nil
+	                                                  lensModel:nil
+	                                                includeNull:NO
+	                                                 completion:^(NSArray<NSString *> *_Nullable suggestions, NSError *_Nullable error) {
+		SearchViewController *strongSelf = weakSelf;
+		if (!strongSelf || generation != strongSelf.discoveryGeneration) {
+			return;
+		}
+		strongSelf.discoveryTask = nil;
+		[strongSelf.activityIndicator stopAnimating];
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+			return;
+		}
+		if (error || !suggestions) {
+			[strongSelf showDiscoveryError:error title:_(@"Location suggestions")];
+			return;
+		}
+		NSMutableArray<NSString *> *filtered = [NSMutableArray arrayWithCapacity:MIN((NSUInteger)30, suggestions.count)];
+		for (NSString *suggestion in suggestions) {
+			if (query.length > 0 && [suggestion.lowercaseString rangeOfString:query].location == NSNotFound) {
+				continue;
+			}
+			[filtered addObject:suggestion];
+			if (filtered.count == 30) break;
+		}
+		if (filtered.count == 0) {
+			[strongSelf showDiscoveryError:[NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:@{ NSLocalizedDescriptionKey: _(@"No location suggestions found.") }]
+			                         title:_(@"Location suggestions")];
+			return;
+		}
+		if (!strongSelf.viewIfLoaded.window) {
+			return;
+		}
+		UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Choose a location") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+		for (NSString *suggestion in filtered) {
+			[sheet addAction:[UIAlertAction actionWithTitle:suggestion style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+				strongSelf.searchController.searchBar.text = suggestion;
+				[strongSelf updateSearchResultsForSearchController:strongSelf.searchController];
+			}]];
+		}
+		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		if (sheet.popoverPresentationController) {
+			sheet.popoverPresentationController.barButtonItem = strongSelf.navigationItem.rightBarButtonItem;
+		}
+		[strongSelf presentViewController:sheet animated:YES completion:nil];
+	}];
+}
+
 #pragma mark - UISearchResultsUpdating
 
 - (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
 	NSString *text = [searchController.searchBar.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	[self.debounceTimer invalidate];
+	if (self.discoveryTask) {
+		self.discoveryGeneration += 1;
+		[self.discoveryTask cancel];
+		self.discoveryTask = nil;
+	}
 
 	if (text.length == 0) {
 		self.lastQuery = nil;
@@ -317,6 +536,9 @@ static const CGFloat kScopeBarHeight = 44;
 	self.searchGeneration += 1;
 	[self.searchTask cancel];
 	self.searchTask = nil;
+	self.discoveryGeneration += 1;
+	[self.discoveryTask cancel];
+	self.discoveryTask = nil;
 	[self.activityIndicator stopAnimating];
 }
 

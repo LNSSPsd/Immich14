@@ -25,6 +25,18 @@ presentingController:(UIViewController *)presenter
 + (void)presentAddToAlbumForAssets:(NSArray<IMAsset *> *)assets
               presentingController:(UIViewController *)presenter;
 
++ (void)presentVisibilityPickerForAssets:(NSArray<IMAsset *> *)assets
+                    presentingController:(UIViewController *)presenter
+                               completion:(void (^)(BOOL success))completion;
+
++ (void)presentCreateStackForAssets:(NSArray<IMAsset *> *)assets
+                presentingController:(UIViewController *)presenter
+                           completion:(void (^)(BOOL success))completion;
+
++ (void)presentAssetJobPickerForAssets:(NSArray<IMAsset *> *)assets
+                  presentingController:(UIViewController *)presenter
+                             completion:(void (^)(BOOL success))completion;
+
 + (void)showErrorAlertWithTitle:(NSString *)title
                           message:(nullable NSString *)message
             presentingController:(UIViewController *)presenter;

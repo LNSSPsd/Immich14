@@ -8,6 +8,7 @@ extern NSString *const IMApiErrorStatusCodeKey;
 
 typedef void (^IMJSONHandler)(id _Nullable json, NSError *_Nullable error);
 typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
+typedef void (^IMFileHandler)(NSURL *_Nullable fileURL, NSError *_Nullable error);
 
 @interface IMApiClient : NSObject
 
@@ -19,6 +20,8 @@ typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
 
 @property (nonatomic, copy, nullable) NSString *overrideAPIKey;
 
+@property (nonatomic) BOOL anonymous;
+
 - (void)invalidate;
 
 - (void)resetConnections;
@@ -27,9 +30,22 @@ typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
                     query:(nullable NSDictionary<NSString *, NSString *> *)query
                completion:(IMJSONHandler)completion;
 
+- (NSURLSessionTask *)GET:(NSString *)path
+               queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+               completion:(IMJSONHandler)completion;
+
 - (NSURLSessionTask *)POST:(NSString *)path
                       body:(nullable id)body
                 completion:(IMJSONHandler)completion;
+
+- (NSURLSessionTask *)POST:(NSString *)path
+                queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+                      body:(nullable id)body
+                completion:(IMJSONHandler)completion;
+
+- (NSURLSessionTask *)POSTForm:(NSString *)path
+                         fields:(NSDictionary<NSString *, NSString *> *)fields
+                     completion:(IMJSONHandler)completion;
 
 - (NSURLSessionTask *)PUT:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion;
 - (NSURLSessionTask *)PATCH:(NSString *)path body:(nullable id)body completion:(IMJSONHandler)completion;
@@ -38,6 +54,18 @@ typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
 - (NSURLSessionTask *)getData:(NSString *)path
                         query:(nullable NSDictionary<NSString *, NSString *> *)query
                    completion:(IMDataHandler)completion;
+
+- (NSURLSessionTask *)downloadFile:(NSString *)path
+                              query:(nullable NSDictionary<NSString *, NSString *> *)query
+                     destinationURL:(NSURL *)destinationURL
+                          completion:(IMFileHandler)completion;
+
+- (NSURLSessionTask *)downloadFile:(NSString *)path
+                             method:(NSString *)method
+                              query:(nullable NSDictionary<NSString *, NSString *> *)query
+                               body:(nullable id)body
+                     destinationURL:(NSURL *)destinationURL
+                          completion:(IMFileHandler)completion;
 
 - (NSURLSessionTask *)multipartPOST:(NSString *)path
                              fields:(NSDictionary<NSString *, NSString *> *)fields

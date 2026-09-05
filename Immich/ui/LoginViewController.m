@@ -1,6 +1,7 @@
 #import "LoginViewController.h"
 #import "common.h"
 #import "IMAuthApi.h"
+#import "IMOAuthCoordinator.h"
 
 static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 
@@ -58,6 +59,8 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 @property (nonatomic, strong) IMLoginTextField *apiKeyField;
 @property (nonatomic, strong) UIButton *loginButton;
 @property (nonatomic, strong) UIButton *authModeButton;
+@property (nonatomic, strong) UIButton *oauthButton;
+@property (nonatomic, strong) UIButton *signupButton;
 @property (nonatomic, strong) UILabel *errorLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic) BOOL usingAPIKey; 
@@ -184,8 +187,20 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	self.authModeButton.translatesAutoresizingMaskIntoConstraints = NO;
 	[self.authModeButton addTarget:self action:@selector(authModeTapped) forControlEvents:UIControlEventTouchUpInside];
 
+	self.oauthButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.oauthButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.oauthButton setTitle:_(@"Sign in with OAuth") forState:UIControlStateNormal];
+	self.oauthButton.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+	[self.oauthButton addTarget:self action:@selector(oauthTapped) forControlEvents:UIControlEventTouchUpInside];
+
+	self.signupButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.signupButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.signupButton setTitle:_(@"Create first administrator") forState:UIControlStateNormal];
+	self.signupButton.titleLabel.font = [UIFont systemFontOfSize:15];
+	[self.signupButton addTarget:self action:@selector(signupTapped) forControlEvents:UIControlEventTouchUpInside];
+
 	UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
-		badge, titleLabel, subtitleLabel, fieldStack, self.errorLabel, self.loginButton, self.authModeButton
+		badge, titleLabel, subtitleLabel, fieldStack, self.errorLabel, self.loginButton, self.authModeButton, self.oauthButton, self.signupButton
 	]];
 	stack.axis = UILayoutConstraintAxisVertical;
 	stack.alignment = UIStackViewAlignmentFill;
@@ -196,6 +211,8 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	[stack setCustomSpacing:8 afterView:fieldStack];
 	[stack setCustomSpacing:20 afterView:self.errorLabel];
 	[stack setCustomSpacing:16 afterView:self.loginButton];
+	[stack setCustomSpacing:8 afterView:self.authModeButton];
+	[stack setCustomSpacing:4 afterView:self.oauthButton];
 	[self.contentView addSubview:stack];
 
 	[NSLayoutConstraint activateConstraints:@[
@@ -284,6 +301,82 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	                      forState:UIControlStateNormal];
 }
 
+- (void)oauthTapped {
+	[self dismissKeyboard];
+	NSURL *baseURL = [self normalizedBaseURLFromInput:self.serverField.text ?: @""];
+	if (!baseURL) {
+		self.errorLabel.text = _(@"Enter a server URL.");
+		return;
+	}
+	[self beginLoginRequest];
+	__weak typeof(self) weakSelf = self;
+	[IMOAuthCoordinator.shared startLoginFromViewController:self
+	                                                  baseURL:baseURL
+	                                               completion:^(BOOL success, NSError *error) {
+		LoginViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		[strongSelf finishLoginRequestWithSuccess:success error:error];
+	}];
+}
+
+- (void)signupTapped {
+	[self dismissKeyboard];
+	NSURL *baseURL = [self normalizedBaseURLFromInput:self.serverField.text ?: @""];
+	if (!baseURL) {
+		self.errorLabel.text = _(@"Enter a server URL.");
+		return;
+	}
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Create first administrator")
+	                                                                 message:_(@"This works only while the Immich server has no administrator account.")
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Email");
+		field.keyboardType = UIKeyboardTypeEmailAddress;
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Name");
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Password");
+		field.secureTextEntry = YES;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Confirm password");
+		field.secureTextEntry = YES;
+	}];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Create") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		LoginViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSArray<UITextField *> *fields = alert.textFields;
+		NSString *email = [fields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		NSString *name = [fields[1].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		NSString *password = fields[2].text ?: @"";
+		NSString *confirmation = fields[3].text ?: @"";
+		if (email.length == 0 || name.length == 0 || password.length == 0) {
+			strongSelf.errorLabel.text = _(@"Email, name, and password are required.");
+			return;
+		}
+		if (![password isEqualToString:confirmation]) {
+			strongSelf.errorLabel.text = _(@"Passwords do not match.");
+			return;
+		}
+		[strongSelf beginSignupRequest];
+		[IMAuthApi signUpAdminWithBaseURL:baseURL
+		                             email:email
+		                              name:name
+		                           password:password
+		                         completion:^(IMAdminUser *_Nullable user, NSError *_Nullable error) {
+			LoginViewController *inner = weakSelf;
+			if (!inner) return;
+			[inner finishSignupWithUser:user error:error email:email password:password];
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
 #pragma mark - UITextFieldDelegate
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
@@ -360,6 +453,8 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	self.errorLabel.text = @"";
 	self.loginButton.enabled = NO;
 	self.authModeButton.enabled = NO;
+	self.oauthButton.enabled = NO;
+	self.signupButton.enabled = NO;
 	[self.loginButton setTitle:@"" forState:UIControlStateNormal];
 	[self.spinner startAnimating];
 }
@@ -368,6 +463,8 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	[self.spinner stopAnimating];
 	self.loginButton.enabled = YES;
 	self.authModeButton.enabled = YES;
+	self.oauthButton.enabled = YES;
+	self.signupButton.enabled = YES;
 	[self.loginButton setTitle:_(@"Log In") forState:UIControlStateNormal];
 	if (!success) {
 		self.errorLabel.text = error.localizedDescription ?: _(@"Login failed.");
@@ -375,6 +472,36 @@ static NSString *const kLastServerURLDefaultsKey = @"IMLastServerURL";
 	}
 	[[NSUserDefaults standardUserDefaults] setObject:self.serverField.text
 	                                           forKey:kLastServerURLDefaultsKey];
+}
+
+- (void)beginSignupRequest {
+	self.errorLabel.text = @"";
+	self.loginButton.enabled = NO;
+	self.authModeButton.enabled = NO;
+	self.oauthButton.enabled = NO;
+	self.signupButton.enabled = NO;
+	[self.loginButton setTitle:@"" forState:UIControlStateNormal];
+	[self.spinner startAnimating];
+}
+
+- (void)finishSignupWithUser:(IMAdminUser *)user
+	                    error:(NSError *)error
+	                   email:(NSString *)email
+	                password:(NSString *)password {
+	[self.spinner stopAnimating];
+	self.loginButton.enabled = YES;
+	self.authModeButton.enabled = YES;
+	self.oauthButton.enabled = YES;
+	self.signupButton.enabled = YES;
+	[self.loginButton setTitle:_(@"Log In") forState:UIControlStateNormal];
+	if (!user || error) {
+		self.errorLabel.text = error.localizedDescription ?: _(@"Could not create the administrator.");
+		return;
+	}
+	if (self.usingAPIKey) [self authModeTapped];
+	self.emailField.text = email;
+	self.passwordField.text = password;
+	self.errorLabel.text = _(@"Administrator created. Tap Log In to continue.");
 }
 
 @end

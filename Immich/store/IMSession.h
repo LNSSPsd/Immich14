@@ -17,6 +17,8 @@ typedef NS_ENUM(NSInteger, IMSessionAuthKind) {
 @property (nonatomic, copy, readonly, nullable) NSString *userId;
 @property (nonatomic, readonly) IMSessionAuthKind authKind; 
 
+- (void)reloadFromPersistence;
+
 - (void)startWithBaseURL:(NSURL *)baseURL
              accessToken:(NSString *)token
                   userId:(NSString *)userId;

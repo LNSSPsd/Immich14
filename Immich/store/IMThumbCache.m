@@ -199,9 +199,15 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 					    }
 					    typeof(self) cache = weakSelf;
 					    if (cache) {
-						    cache.writesSinceTrim += 1;
-						    if (cache.writesSinceTrim >= kWritesPerTrimCheck) {
-							    cache.writesSinceTrim = 0;
+						    BOOL shouldTrim = NO;
+						    @synchronized (cache) {
+							    cache.writesSinceTrim += 1;
+							    if (cache.writesSinceTrim >= kWritesPerTrimCheck) {
+								    cache.writesSinceTrim = 0;
+								    shouldTrim = YES;
+							    }
+						    }
+						    if (shouldTrim) {
 							    [cache trimDiskCache];
 						    }
 					    }
@@ -237,11 +243,46 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 
 - (void)clearWithCompletion:(void (^)(void))completion {
 	[self.memoryCache removeAllObjects];
+	@synchronized (self) {
+		self.writesSinceTrim = 0;
+	}
 	NSString *dir = self.diskCacheDir;
-	dispatch_async(self.ioQueue, ^{
+	dispatch_barrier_async(self.ioQueue, ^{
 		NSFileManager *fm = [NSFileManager defaultManager];
 		for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
 			[fm removeItemAtPath:[dir stringByAppendingPathComponent:name] error:nil];
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion();
+		});
+	});
+}
+
+- (void)invalidateThumbnailsForAssetIds:(NSSet<NSString *> *)assetIds
+                             completion:(void (^)(void))completion {
+	NSMutableArray<NSString *> *keys = [NSMutableArray array];
+	NSArray<NSString *> *sizes = @[ IMAssetMediaSizeThumbnail, IMAssetMediaSizePreview ];
+	for (NSString *assetId in assetIds) {
+		if (![assetId isKindOfClass:[NSString class]] || assetId.length == 0) {
+			continue;
+		}
+		for (NSString *size in sizes) {
+			NSString *key = [self cacheKeyForAssetId:assetId size:size];
+			[keys addObject:key];
+			[self.memoryCache removeObjectForKey:key];
+		}
+	}
+	if (keys.count == 0) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion();
+		});
+		return;
+	}
+
+	dispatch_barrier_async(self.ioQueue, ^{
+		NSFileManager *fm = [NSFileManager defaultManager];
+		for (NSString *key in keys) {
+			[fm removeItemAtPath:[self diskPathForKey:key] error:nil];
 		}
 		dispatch_async(dispatch_get_main_queue(), ^{
 			completion();

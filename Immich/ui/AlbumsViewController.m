@@ -48,6 +48,20 @@ static const CGFloat kLabelsHeight = 44;
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
 	                                                                                        target:self
 	                                                                                        action:@selector(createTapped)];
+	UIBarButtonItem *statisticsButton = nil;
+	if (@available(iOS 13.0, *)) {
+		statisticsButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"info.circle"]
+		                                                    style:UIBarButtonItemStylePlain
+		                                                   target:self
+		                                                   action:@selector(statisticsTapped)];
+	} else {
+		statisticsButton = [[UIBarButtonItem alloc] initWithTitle:@"i"
+		                                                   style:UIBarButtonItemStylePlain
+		                                                  target:self
+		                                                  action:@selector(statisticsTapped)];
+	}
+	self.navigationItem.leftBarButtonItem = statisticsButton;
+	self.navigationItem.leftBarButtonItem.accessibilityLabel = _(@"Album statistics");
 
 	UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
 	layout.minimumInteritemSpacing = kCellSpacing;
@@ -152,6 +166,35 @@ static const CGFloat kLabelsHeight = 44;
 		    [weakSelf createAlbumWithName:name];
 	    }]];
 	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)statisticsTapped {
+	UIBarButtonItem *button = self.navigationItem.leftBarButtonItem;
+	button.enabled = NO;
+	__weak typeof(self) weakSelf = self;
+	[IMAlbumApi statisticsWithCompletion:^(IMAlbumStatistics *_Nullable statistics, NSError *_Nullable error) {
+		 typeof(self) strongSelf = weakSelf;
+		 if (!strongSelf) {
+			 return;
+		 }
+		 strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+		 NSString *message = nil;
+		 if (error || !statistics) {
+			 message = error.localizedDescription ?: _(@"The server could not load album statistics.");
+		} else {
+			 NSNumberFormatter *formatter = [[NSNumberFormatter alloc] init];
+			 formatter.numberStyle = NSNumberFormatterDecimalStyle;
+			 message = [NSString stringWithFormat:_(@"Owned: %@\nShared: %@\nNot shared: %@"),
+			            [formatter stringFromNumber:@(statistics.owned)] ?: @"0",
+			            [formatter stringFromNumber:@(statistics.shared)] ?: @"0",
+			            [formatter stringFromNumber:@(statistics.notShared)] ?: @"0"];
+		 }
+		 UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Album statistics")
+		                                                                  message:message
+		                                                           preferredStyle:UIAlertControllerStyleAlert];
+		 [alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		 [strongSelf presentViewController:alert animated:YES completion:nil];
+	}];
 }
 
 - (void)createAlbumWithName:(NSString *)name {

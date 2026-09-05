@@ -8,17 +8,57 @@
 @property (nonatomic, strong, nullable) NSURLSession *urlSession;
 @property (nonatomic, strong, nullable) NSURLSessionDataTask *streamTask;
 @property (nonatomic) BOOL polling;
+@property (nonatomic) NSUInteger generation;
+@property (nonatomic) NSUInteger streamGeneration;
+@property (nonatomic, copy, nullable) NSString *sessionFingerprint;
 
 @property (nonatomic, strong) NSMutableData *lineBuffer;
 @property (nonatomic, strong) NSMutableSet<NSString *> *changedBuckets;
 @property (nonatomic) BOOL sawDeletes;
 @property (nonatomic) BOOL needsReset;
-@property (nonatomic, copy, nullable) NSString *lastAck;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *acksByType;
 @property (nonatomic) BOOL bootstrapping;
 @property (nonatomic, copy, nullable) void (^completion)(NSSet<NSString *> *_Nullable, BOOL, NSError *_Nullable);
 @end
 
 @implementation IMSyncStreamApi
+
+static NSString *IMSyncSessionFingerprint(void) {
+	IMSession *session = IMSession.shared;
+	if (!session.isLoggedIn || session.baseURL.absoluteString.length == 0 || session.accessToken.length == 0) {
+		return nil;
+	}
+	return [@[ session.baseURL.absoluteString,
+	           session.userId ?: @"",
+	           @(session.authKind),
+	           session.accessToken ] componentsJoinedByString:@"\n"];
+}
+
+static BOOL IMSyncUUIDv4String(id value) {
+	if (![value isKindOfClass:[NSString class]] || [(NSString *)value length] != 36) return NO;
+	NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:value];
+	if (!uuid) return NO;
+	NSString *canonical = uuid.UUIDString.lowercaseString;
+	NSString *raw = [(NSString *)value lowercaseString];
+	return [raw isEqualToString:canonical] && [canonical characterAtIndex:14] == '4' &&
+	       ([canonical characterAtIndex:19] == '8' || [canonical characterAtIndex:19] == '9' ||
+	        [canonical characterAtIndex:19] == 'a' || [canonical characterAtIndex:19] == 'b');
+}
+
+- (instancetype)init {
+	self = [super init];
+	if (self) {
+		[[NSNotificationCenter defaultCenter] addObserver:self
+		                                          selector:@selector(sessionDidChange:)
+		                                              name:IMSessionDidChangeNotification
+		                                            object:nil];
+	}
+	return self;
+}
+
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 
 + (instancetype)shared {
 	static IMSyncStreamApi *shared;
@@ -47,6 +87,11 @@
 	if (self.polling || !IMSession.shared.isLoggedIn) {
 		return;
 	}
+	NSString *fingerprint = IMSyncSessionFingerprint();
+	if (fingerprint.length == 0) {
+		return;
+	}
+	NSUInteger generation = ++self.generation;
 	self.polling = YES;
 
 	__weak typeof(self) weakSelf = self;
@@ -55,17 +100,31 @@
 		if (!strongSelf) {
 			return;
 		}
+		if (generation != strongSelf.generation ||
+		    ![fingerprint isEqualToString:IMSyncSessionFingerprint()]) {
+			if (generation == strongSelf.generation) strongSelf.polling = NO;
+			return;
+		}
 		if (error || ![json isKindOfClass:[NSArray class]]) {
 			strongSelf.polling = NO;
 			completion(nil, NO, error ?: [NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:nil]);
 			return;
 		}
-		[strongSelf openStreamBootstrapping:(((NSArray *)json).count == 0) completion:completion];
+		[strongSelf openStreamBootstrapping:(((NSArray *)json).count == 0)
+		                  sessionFingerprint:fingerprint
+		                         generation:generation
+		                         completion:completion];
 	}];
 }
 
 - (void)openStreamBootstrapping:(BOOL)bootstrapping
+               sessionFingerprint:(NSString *)fingerprint
+                      generation:(NSUInteger)generation
                      completion:(void (^)(NSSet<NSString *> *_Nullable, BOOL, NSError *_Nullable))completion {
+	if (generation != self.generation || ![fingerprint isEqualToString:IMSyncSessionFingerprint()]) {
+		self.polling = NO;
+		return;
+	}
 	NSURL *url = [IMSession.shared.baseURL URLByAppendingPathComponent:@"sync/stream"];
 	if (!url) {
 		self.polling = NO;
@@ -77,8 +136,10 @@
 	self.changedBuckets = [NSMutableSet set];
 	self.sawDeletes = NO;
 	self.needsReset = NO;
-	self.lastAck = nil;
+	self.acksByType = [NSMutableDictionary dictionary];
 	self.bootstrapping = bootstrapping;
+	self.streamGeneration = generation;
+	self.sessionFingerprint = [fingerprint copy];
 	self.completion = completion;
 
 	NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
@@ -91,7 +152,7 @@
 	} else if (bearer) {
 		[request setValue:bearer forHTTPHeaderField:@"Authorization"];
 	}
-	request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{ @"types": @[ @"AssetsV1" ] }
+	request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{ @"types": @[ @"AssetsV2" ] }
 	                                                    options:0
 	                                                      error:NULL];
 
@@ -107,14 +168,17 @@
 	}
 	NSDictionary *event = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:NULL];
 	if (![event isKindOfClass:[NSDictionary class]]) {
+		self.needsReset = YES;
 		return;
 	}
 	NSString *ack = event[@"ack"];
 	if ([ack isKindOfClass:[NSString class]] && ack.length > 0) {
-		self.lastAck = ack;
+		NSString *ackType = [[ack componentsSeparatedByString:@"|"] firstObject];
+		if (ackType.length > 0) self.acksByType[ackType] = ack;
 	}
 	NSString *type = event[@"type"];
 	if (![type isKindOfClass:[NSString class]]) {
+		self.needsReset = YES;
 		return;
 	}
 
@@ -122,19 +186,36 @@
 		self.needsReset = YES;
 		return;
 	}
-	if (![type hasPrefix:@"Asset"]) {
+	if ([type isEqualToString:@"SyncAckV1"] || [type isEqualToString:@"SyncCompleteV1"]) {
 		return; 
 	}
-	if ([type rangeOfString:@"Delete"].location != NSNotFound) {
+	if ([type isEqualToString:@"AssetDeleteV1"] || [type rangeOfString:@"Delete"].location != NSNotFound) {
 		self.sawDeletes = YES;
+		return;
+	}
+	if (![type isEqualToString:@"AssetV2"]) {
+		if ([type hasPrefix:@"Asset"]) self.needsReset = YES;
 		return;
 	}
 
 	NSDictionary *data = event[@"data"];
 	if (![data isKindOfClass:[NSDictionary class]]) {
+		self.needsReset = YES;
+		return;
+	}
+	if (!IMSyncUUIDv4String(data[@"id"])) {
+		self.needsReset = YES;
 		return;
 	}
 	id fileCreatedAt = data[@"fileCreatedAt"];
+	if (fileCreatedAt && fileCreatedAt != [NSNull null] && ![fileCreatedAt isKindOfClass:[NSString class]]) {
+		self.needsReset = YES;
+		return;
+	}
+	if ([fileCreatedAt isKindOfClass:[NSString class]] && !IMDateFromServerTimestamp(fileCreatedAt)) {
+		self.needsReset = YES;
+		return;
+	}
 	NSString *bucket = [fileCreatedAt isKindOfClass:[NSString class]]
 	    ? IMTimeBucketKeyForDate(IMDateFromServerTimestamp(fileCreatedAt))
 	    : nil;
@@ -173,6 +254,7 @@
 - (void)URLSession:(NSURLSession *)session
           dataTask:(NSURLSessionDataTask *)dataTask
     didReceiveData:(NSData *)data {
+	if (dataTask != self.streamTask || self.streamGeneration != self.generation) return;
 	[self.lineBuffer appendData:data];
 	[self drainBuffer:NO];
 }
@@ -180,6 +262,7 @@
 - (void)URLSession:(NSURLSession *)session
               task:(NSURLSessionTask *)task
     didCompleteWithError:(NSError *)error {
+	if (task != self.streamTask || self.streamGeneration != self.generation) return;
 	[self drainBuffer:YES];
 
 	NSInteger status = 0;
@@ -195,19 +278,26 @@
 	NSSet<NSString *> *changed = error ? nil
 	    : (self.bootstrapping ? [NSSet set] : [self.changedBuckets copy]);
 	BOOL deletes = error ? NO : (!self.bootstrapping && (self.sawDeletes || self.needsReset));
-	NSString *ack = self.lastAck;
+	NSArray<NSString *> *acks = error ? @[] : [self.acksByType.allValues sortedArrayUsingSelector:@selector(compare:)];
 	BOOL reset = self.needsReset;
+	NSUInteger generation = self.streamGeneration;
+	NSString *fingerprint = [self.sessionFingerprint copy];
 	void (^completion)(NSSet<NSString *> *_Nullable, BOOL, NSError *_Nullable) = self.completion;
 	self.completion = nil;
 	self.streamTask = nil;
 	self.lineBuffer = [NSMutableData data];
+	self.acksByType = nil;
 
 	dispatch_async(dispatch_get_main_queue(), ^{
+		if (generation != self.generation || ![fingerprint isEqualToString:IMSyncSessionFingerprint()]) {
+			self.polling = NO;
+			return;
+		}
 		if (!error) {
 			if (reset) {
 				[[IMApiClient shared] DELETE:@"/sync/ack" body:@{} completion:^(id _Nullable json, NSError *_Nullable ackError) {}];
-			} else if (ack) {
-				[[IMApiClient shared] POST:@"/sync/ack" body:@{ @"acks": @[ ack ] } completion:^(id _Nullable json, NSError *_Nullable ackError) {
+			} else if (acks.count > 0) {
+				[[IMApiClient shared] POST:@"/sync/ack" body:@{ @"acks": acks } completion:^(id _Nullable json, NSError *_Nullable ackError) {
 					if (ackError) {
 						NSLog(@"IMSyncStreamApi: ack failed: %@", ackError);
 					}
@@ -219,6 +309,20 @@
 			completion(changed, deletes, error);
 		}
 	});
+}
+
+- (void)sessionDidChange:(NSNotification *)notification {
+	(void)notification;
+	self.generation += 1;
+	self.polling = NO;
+	self.completion = nil;
+	self.sessionFingerprint = nil;
+	self.streamTask = nil;
+	self.lineBuffer = [NSMutableData data];
+	self.acksByType = nil;
+	NSURLSession *session = self.urlSession;
+	self.urlSession = nil;
+	[session invalidateAndCancel];
 }
 
 - (void)URLSession:(NSURLSession *)session

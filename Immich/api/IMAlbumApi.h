@@ -1,6 +1,8 @@
 #import <Foundation/Foundation.h>
 #import "IMAlbum.h"
 #import "IMAsset.h"
+#import "IMAlbumStatistics.h"
+#import "IMMapMarker.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -13,6 +15,16 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)allAlbumsWithCompletion:(void (^)(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error))completion;
 
 + (NSArray<IMAlbum *> *)cachedAlbums;
++ (void)albumForId:(NSString *)albumId completion:(void (^)(IMAlbum *_Nullable album, NSError *_Nullable error))completion;
+
++ (void)statisticsWithCompletion:(void (^)(IMAlbumStatistics *_Nullable statistics,
+                                            NSError *_Nullable error))completion;
+
++ (void)mapMarkersForAlbumId:(NSString *)albumId
+                         key:(nullable NSString *)key
+                        slug:(nullable NSString *)slug
+                  completion:(void (^)(NSArray<IMMapMarker *> *_Nullable markers,
+                                        NSError *_Nullable error))completion;
 
 + (void)createAlbumWithName:(NSString *)name
                    completion:(void (^)(IMAlbum *_Nullable album, NSError *_Nullable error))completion;
@@ -20,6 +32,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)renameAlbumId:(NSString *)albumId
                    name:(NSString *)name
              completion:(void (^)(IMAlbum *_Nullable album, NSError *_Nullable error))completion;
+
++ (void)updateAlbumId:(NSString *)albumId
+               fields:(NSDictionary<NSString *, id> *)fields
+           completion:(void (^)(IMAlbum *_Nullable album, NSError *_Nullable error))completion;
 
 + (void)deleteAlbumId:(NSString *)albumId completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 
@@ -33,6 +49,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)addAssetIds:(NSArray<NSString *> *)assetIds
           toAlbumId:(NSString *)albumId
          completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
+
++ (void)addAssetIds:(NSArray<NSString *> *)assetIds
+       toAlbumIds:(NSArray<NSString *> *)albumIds
+       completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 
 + (void)addAssetIds:(NSArray<NSString *> *)assetIds
           toAlbumId:(NSString *)albumId

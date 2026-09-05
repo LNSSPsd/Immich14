@@ -57,10 +57,14 @@ static const CGFloat kFooterHeight = 56;
 
 @property (nonatomic) BOOL selecting;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, IMAsset *> *selectedAssets;
+@property (nonatomic, strong) NSMutableArray<NSString *> *selectedAssetOrder;
 @property (nonatomic, strong) UIBarButtonItem *favoriteButton;
 @property (nonatomic, strong) UIBarButtonItem *addAlbumButton;
 @property (nonatomic, strong) UIBarButtonItem *downloadButton;
+@property (nonatomic, strong) UIBarButtonItem *visibilityButton;
+@property (nonatomic, strong) UIBarButtonItem *stackButton;
 @property (nonatomic, strong) UIBarButtonItem *deleteButton;
+@property (nonatomic, strong) UIBarButtonItem *jobButton;
 
 @property (nonatomic) NSInteger columnStepIndex; 
 @property (nonatomic) CGFloat liveColumns;        
@@ -101,6 +105,7 @@ static const CGFloat kCellSpacing = 2;
 		_loadingBuckets = [NSMutableSet set];
 		_localScanQueue = dispatch_queue_create("com.lns.immich-ios-14.timeline.localscan", DISPATCH_QUEUE_SERIAL);
 		_selectedAssets = [NSMutableDictionary dictionary];
+		_selectedAssetOrder = [NSMutableArray array];
 		_columnStepIndex = 2; 
 		_liveColumns = kColumnSteps[_columnStepIndex];
 		_denseBadgeViewsByBucket = [NSMutableDictionary dictionary];
@@ -355,6 +360,7 @@ static const CGFloat kCellSpacing = 2;
 - (void)toggleSelecting {
 	self.selecting = !self.selecting;
 	[self.selectedAssets removeAllObjects];
+	[self.selectedAssetOrder removeAllObjects];
 	for (NSIndexPath *indexPath in [self.collectionView.indexPathsForSelectedItems copy]) {
 		[self.collectionView deselectItemAtIndexPath:indexPath animated:NO];
 	}
@@ -368,16 +374,23 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (NSArray<UIBarButtonItem *> *)makeSelectionToolbarItems {
-	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *trashImage = nil;
+	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *moveImage = nil, *stackImage = nil, *trashImage = nil, *jobImage = nil;
 	if (@available(iOS 13.0, *)) {
 		starImage = [UIImage systemImageNamed:@"star"];
 		albumImage = [UIImage systemImageNamed:@"plus.rectangle.on.folder"];
 		downloadImage = [UIImage systemImageNamed:@"square.and.arrow.down"];
+		moveImage = [UIImage systemImageNamed:@"folder"];
+		stackImage = [UIImage systemImageNamed:@"square.stack.3d.up"];
 		trashImage = [UIImage systemImageNamed:@"trash"];
+		jobImage = [UIImage systemImageNamed:@"gearshape"];
 	}
 	self.favoriteButton = [[UIBarButtonItem alloc] initWithImage:starImage style:UIBarButtonItemStylePlain target:self action:@selector(favoriteSelected)];
 	self.addAlbumButton = [[UIBarButtonItem alloc] initWithImage:albumImage style:UIBarButtonItemStylePlain target:self action:@selector(addSelectedToAlbum)];
 	self.downloadButton = [[UIBarButtonItem alloc] initWithImage:downloadImage style:UIBarButtonItemStylePlain target:self action:@selector(downloadSelected)];
+	self.visibilityButton = [[UIBarButtonItem alloc] initWithImage:moveImage style:UIBarButtonItemStylePlain target:self action:@selector(moveSelected)];
+	self.stackButton = [[UIBarButtonItem alloc] initWithImage:stackImage style:UIBarButtonItemStylePlain target:self action:@selector(stackSelected)];
+	self.jobButton = [[UIBarButtonItem alloc] initWithImage:jobImage style:UIBarButtonItemStylePlain target:self action:@selector(jobSelected)];
+	self.jobButton.accessibilityLabel = _(@"Run asset job");
 	self.deleteButton = [[UIBarButtonItem alloc] initWithImage:trashImage style:UIBarButtonItemStylePlain target:self action:@selector(deleteSelected)];
 	if (@available(iOS 13.0, *)) {
 		self.deleteButton.tintColor = UIColor.systemRedColor;
@@ -385,7 +398,10 @@ static const CGFloat kCellSpacing = 2;
 	UIBarButtonItem *flex1 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex2 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex3 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.deleteButton ];
+	UIBarButtonItem *flex4 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	UIBarButtonItem *flex5 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	UIBarButtonItem *flex6 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.visibilityButton, flex4, self.stackButton, flex5, self.jobButton, flex6, self.deleteButton ];
 }
 
 - (void)updateSelectionToolbarState {
@@ -393,12 +409,50 @@ static const CGFloat kCellSpacing = 2;
 	self.favoriteButton.enabled = hasSelection;
 	self.addAlbumButton.enabled = hasSelection;
 	self.downloadButton.enabled = hasSelection;
+	self.visibilityButton.enabled = hasSelection;
+	self.stackButton.enabled = self.selectedAssets.count >= 2;
+	self.jobButton.enabled = hasSelection;
 	self.deleteButton.enabled = hasSelection;
 	[self updateTitleBarForSelectionState];
 }
 
+- (NSArray<IMAsset *> *)orderedSelectedAssets {
+	NSMutableArray<IMAsset *> *assets = [NSMutableArray arrayWithCapacity:self.selectedAssetOrder.count];
+	for (NSString *assetId in self.selectedAssetOrder) {
+		IMAsset *asset = self.selectedAssets[assetId];
+		if (asset) [assets addObject:asset];
+	}
+	return assets;
+}
+
+- (void)moveSelected {
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions presentVisibilityPickerForAssets:assets presentingController:self completion:^(BOOL success) {
+		if (success) { [weakSelf toggleSelecting]; [weakSelf pullToRefresh]; }
+	}];
+}
+
+- (void)stackSelected {
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions presentCreateStackForAssets:assets presentingController:self completion:^(BOOL success) {
+		if (success) { [weakSelf toggleSelecting]; [weakSelf pullToRefresh]; }
+	}];
+}
+
+- (void)jobSelected {
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions presentAssetJobPickerForAssets:assets presentingController:self completion:^(BOOL success) {
+		if (success) {
+			[weakSelf toggleSelecting];
+		}
+	}];
+}
+
 - (void)favoriteSelected {
-	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
 	BOOL allFavorite = assets.count > 0;
 	for (IMAsset *asset in assets) {
 		if (!asset.isFavorite) {
@@ -415,7 +469,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)deleteSelected {
-	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
 	__weak typeof(self) weakSelf = self;
 	[IMBulkAssetActions confirmDeleteAssets:assets
 	                   presentingController:self
@@ -429,7 +483,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)downloadSelected {
-	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
 	[IMBulkAssetActions downloadAssets:assets
 	              presentingController:self
 	                         completion:^{
@@ -438,7 +492,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)addSelectedToAlbum {
-	NSArray<IMAsset *> *assets = self.selectedAssets.allValues;
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
 	[self toggleSelecting];
 	[IMBulkAssetActions presentAddToAlbumForAssets:assets presentingController:self];
 }
@@ -767,7 +821,15 @@ static const CGFloat kCellSpacing = 2;
 		[collectionView deselectItemAtIndexPath:indexPath animated:NO];
 		return;
 	}
-	self.selectedAssets[asset.assetId] = asset;
+	NSString *assetId = asset.assetId;
+	if (![assetId isKindOfClass:[NSString class]] || assetId.length == 0) {
+		[collectionView deselectItemAtIndexPath:indexPath animated:NO];
+		return;
+	}
+	if (!self.selectedAssets[assetId]) {
+		[self.selectedAssetOrder addObject:assetId];
+	}
+	self.selectedAssets[assetId] = asset;
 	[self updateSelectionToolbarState];
 }
 
@@ -779,7 +841,12 @@ static const CGFloat kCellSpacing = 2;
 	if (!asset) {
 		return;
 	}
-	[self.selectedAssets removeObjectForKey:asset.assetId];
+	NSString *assetId = asset.assetId;
+	if (![assetId isKindOfClass:[NSString class]] || assetId.length == 0) {
+		return;
+	}
+	[self.selectedAssets removeObjectForKey:assetId];
+	[self.selectedAssetOrder removeObject:assetId];
 	[self updateSelectionToolbarState];
 }
 

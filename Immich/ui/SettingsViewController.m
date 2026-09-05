@@ -8,6 +8,22 @@
 #import "IMThumbCache.h"
 #import "IMAssetApi.h"
 #import "common.h"
+#import "PartnersViewController.h"
+#import "AdminUsersViewController.h"
+#import "TrashViewController.h"
+#import "SharedLinksViewController.h"
+#import "VisibilityViewController.h"
+#import "TagsViewController.h"
+#import "PeopleViewController.h"
+#import "FoldersViewController.h"
+#import "AccountSecurityViewController.h"
+#import "AccountActivityViewController.h"
+#import "OAuthAccountViewController.h"
+#import "UserPreferencesViewController.h"
+#import "DuplicatesViewController.h"
+#import "AdminLibrariesViewController.h"
+#import "AdminServerViewController.h"
+#import "ServerApkLinksViewController.h"
 
 typedef NS_ENUM(NSInteger, IMSettingsSection) {
 	IMSettingsSectionAccount = 0,
@@ -21,7 +37,22 @@ typedef NS_ENUM(NSInteger, IMSettingsSection) {
 typedef NS_ENUM(NSInteger, IMAccountRow) {
 	IMAccountRowName = 0,
 	IMAccountRowEmail,
+	IMAccountRowProfileImage,
 	IMAccountRowStorage,
+	IMAccountRowSecurity,
+	IMAccountRowActivity,
+	IMAccountRowOAuth,
+	IMAccountRowLockedPIN,
+	IMAccountRowTrash,
+	IMAccountRowSharedLinks,
+	IMAccountRowArchive,
+	IMAccountRowHidden,
+	IMAccountRowPartners,
+	IMAccountRowTags,
+	IMAccountRowFolders,
+	IMAccountRowPeople,
+	IMAccountRowDuplicates,
+	IMAccountRowAdministration,
 	IMAccountRowLogOut,
 	IMAccountRowCount,
 };
@@ -34,6 +65,8 @@ typedef NS_ENUM(NSInteger, IMServerRow) {
 
 typedef NS_ENUM(NSInteger, IMPreferencesRow) {
 	IMPreferencesRowWifiOnly = 0,
+	IMPreferencesRowLockedPhotosBiometric,
+	IMPreferencesRowUserPreferences,
 	IMPreferencesRowThumbnailQuality,
 	IMPreferencesRowClearCache,
 	IMPreferencesRowCount,
@@ -42,6 +75,7 @@ typedef NS_ENUM(NSInteger, IMPreferencesRow) {
 typedef NS_ENUM(NSInteger, IMAboutRow) {
 	IMAboutRowAppVersion = 0,
 	IMAboutRowServerVersion,
+	IMAboutRowAndroidDownloads,
 	IMAboutRowCount,
 };
 
@@ -49,12 +83,15 @@ static NSString *const kValueCellId = @"value";
 static NSString *const kSwitchCellId = @"switch";
 static NSString *const kActionCellId = @"action";
 
-@interface SettingsViewController () <UITableViewDataSource, UITableViewDelegate>
+@interface SettingsViewController () <UITableViewDataSource, UITableViewDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong, nullable) IMUser *user;
 @property (nonatomic, copy, nullable) NSString *serverVersion;
 @property (nonatomic, strong, nullable) IMServerStorage *serverStorage;
 @property (nonatomic) unsigned long long cacheSizeBytes;
+@property (nonatomic, strong, nullable) UIImage *profileImage;
+@property (nonatomic, strong, nullable) NSURLSessionTask *profileImageTask;
+@property (nonatomic) BOOL profileImageMutating;
 @end
 
 @implementation SettingsViewController
@@ -91,12 +128,17 @@ static NSString *const kActionCellId = @"action";
 	[self reload];
 }
 
+- (void)dealloc {
+	[self.profileImageTask cancel];
+}
+
 - (void)reload {
 	__weak typeof(self) weakSelf = self;
 	[IMUserApi currentUserWithCompletion:^(IMUser *_Nullable user, NSError *_Nullable error) {
 		typeof(self) strongSelf = weakSelf;
 		if (strongSelf && user) {
 			strongSelf.user = user;
+			[strongSelf loadProfileImageForUser:user];
 			[strongSelf.tableView reloadData];
 		}
 	}];
@@ -121,6 +163,27 @@ static NSString *const kActionCellId = @"action";
 		}
 		strongSelf.cacheSizeBytes = bytes;
 		[strongSelf.tableView reloadData];
+		}];
+}
+
+- (void)loadProfileImageForUser:(IMUser *)user {
+	[self.profileImageTask cancel];
+	self.profileImageTask = nil;
+	self.profileImage = nil;
+	if (!user.profileImagePath.length || !user.userId.length) {
+		NSIndexPath *path = [NSIndexPath indexPathForRow:IMAccountRowProfileImage inSection:IMSettingsSectionAccount];
+		if (self.tableView.window) [self.tableView reloadRowsAtIndexPaths:@[path] withRowAnimation:UITableViewRowAnimationNone];
+		return;
+	}
+	NSString *userId = user.userId;
+	__weak typeof(self) weakSelf = self;
+	self.profileImageTask = [IMUserApi profileImageDataForUserId:userId completion:^(NSData *data, NSError *error) {
+		SettingsViewController *self = weakSelf;
+		if (!self || ![self.user.userId isEqualToString:userId]) return;
+		self.profileImageTask = nil;
+		if (!error && data.length) self.profileImage = [UIImage imageWithData:data scale:[UIScreen mainScreen].scale];
+		NSIndexPath *path = [NSIndexPath indexPathForRow:IMAccountRowProfileImage inSection:IMSettingsSectionAccount];
+		if (self.tableView.window) [self.tableView reloadRowsAtIndexPaths:@[path] withRowAnimation:UITableViewRowAnimationNone];
 	}];
 }
 
@@ -192,8 +255,179 @@ static NSString *const kActionCellId = @"action";
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)editProfileTapped {
+	if (!self.user) return;
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Edit Profile") message:nil preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Name"); field.text = self.user.name; }];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Email"); field.text = self.user.email; field.keyboardType = UIKeyboardTypeEmailAddress; field.autocapitalizationType = UITextAutocapitalizationTypeNone; }];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		NSString *name = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		NSString *email = [alert.textFields[1].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		if (!name.length || !email.length) {
+			[weakSelf showProfileError:[NSError errorWithDomain:@"IMUserApi" code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a name and email address.")}]];
+			return;
+		}
+		[IMUserApi updateCurrentUserWithFields:@{ @"name": name, @"email": email } completion:^(IMUser *user, NSError *error) {
+			SettingsViewController *self = weakSelf;
+			if (!self) return;
+			if (error || !user) { [self showProfileError:error]; return; }
+			self.user = user;
+			dispatch_async(dispatch_get_main_queue(), ^{ [self.tableView reloadData]; });
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showProfileError:(NSError *)error {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Profile Update Failed") message:error.localizedDescription ?: _(@"The server could not update your profile.") preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)profileImageTapped {
+	if (self.profileImageMutating) return;
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Profile Image") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Choose Photo") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		[weakSelf chooseProfileImage];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Avatar Color") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		[weakSelf avatarColorTapped];
+	}]];
+	if (self.user.profileImagePath.length) {
+		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Remove Photo") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+			[weakSelf removeProfileImage];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	NSIndexPath *path = [NSIndexPath indexPathForRow:IMAccountRowProfileImage inSection:IMSettingsSectionAccount];
+	UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:path];
+	sheet.popoverPresentationController.sourceView = cell ?: self.view;
+	sheet.popoverPresentationController.sourceRect = cell ? cell.bounds : self.view.bounds;
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)avatarColorTapped {
+	NSArray<NSString *> *colors = @[ @"primary", @"pink", @"red", @"yellow", @"blue", @"green", @"purple", @"orange", @"gray", @"amber" ];
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Avatar Color") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	for (NSString *color in colors) {
+		[sheet addAction:[UIAlertAction actionWithTitle:color.capitalizedString style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			SettingsViewController *self = weakSelf;
+			if (!self || self.profileImageMutating) return;
+			self.profileImageMutating = YES;
+			self.tableView.userInteractionEnabled = NO;
+			[IMUserApi updateCurrentUserWithFields:@{ @"avatarColor": color } completion:^(IMUser *user, NSError *error) {
+				SettingsViewController *inner = weakSelf;
+				if (!inner) return;
+				inner.profileImageMutating = NO;
+				inner.tableView.userInteractionEnabled = YES;
+				if (error || !user) { [inner showProfileError:error]; return; }
+				inner.user = user;
+				[inner.tableView reloadData];
+			}];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Use Default") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		SettingsViewController *self = weakSelf;
+		if (!self || self.profileImageMutating) return;
+		self.profileImageMutating = YES;
+		self.tableView.userInteractionEnabled = NO;
+		[IMUserApi updateCurrentUserWithFields:@{ @"avatarColor": [NSNull null] } completion:^(IMUser *user, NSError *error) {
+			SettingsViewController *inner = weakSelf;
+			if (!inner) return;
+			inner.profileImageMutating = NO;
+			inner.tableView.userInteractionEnabled = YES;
+			if (error || !user) { [inner showProfileError:error]; return; }
+			inner.user = user;
+			[inner.tableView reloadData];
+		}];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) { sheet.popoverPresentationController.sourceView = self.view; sheet.popoverPresentationController.sourceRect = self.view.bounds; }
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)chooseProfileImage {
+	if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary]) {
+		[self showProfileError:[NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"The photo library is unavailable on this device.")}]];
+		return;
+	}
+	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+	picker.delegate = self;
+	picker.allowsEditing = YES;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey,id> *)info {
+	UIImage *image = info[UIImagePickerControllerEditedImage] ?: info[UIImagePickerControllerOriginalImage];
+	__weak typeof(self) weakSelf = self;
+	[picker dismissViewControllerAnimated:YES completion:^{
+		SettingsViewController *self = weakSelf;
+		if (!self || !image) return;
+		NSData *data = UIImageJPEGRepresentation(image, 0.9);
+		if (!data.length) {
+			[self showProfileError:[NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"The selected photo could not be encoded.")}]];
+			return;
+		}
+		[self uploadProfileImageData:data];
+	}];
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+	[picker dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)uploadProfileImageData:(NSData *)data {
+	if (self.profileImageMutating) return;
+	self.profileImageMutating = YES;
+	self.tableView.userInteractionEnabled = NO;
+	__weak typeof(self) weakSelf = self;
+	[IMUserApi uploadProfileImageData:data filename:@"profile.jpg" completion:^(BOOL success, NSError *error) {
+		SettingsViewController *self = weakSelf;
+		if (!self) return;
+		self.profileImageMutating = NO;
+		self.tableView.userInteractionEnabled = YES;
+		if (!success || error) { [self showProfileError:error]; return; }
+		self.user = [IMUserApi cachedUser] ?: self.user;
+		[self loadProfileImageForUser:self.user];
+		[self.tableView reloadData];
+	}];
+}
+
+- (void)removeProfileImage {
+	if (self.profileImageMutating) return;
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Remove profile photo?") message:nil preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Remove") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+		SettingsViewController *self = weakSelf;
+		if (!self) return;
+		self.profileImageMutating = YES;
+		self.tableView.userInteractionEnabled = NO;
+		[IMUserApi deleteProfileImageWithCompletion:^(BOOL success, NSError *error) {
+			SettingsViewController *inner = weakSelf;
+			if (!inner) return;
+			inner.profileImageMutating = NO;
+			inner.tableView.userInteractionEnabled = YES;
+			if (!success || error) { [inner showProfileError:error]; return; }
+			inner.profileImage = nil;
+			inner.user = [IMUserApi cachedUser] ?: inner.user;
+			[inner.tableView reloadData];
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)wifiOnlySwitchChanged:(UISwitch *)sender {
 	IMPrefs.shared.wifiOnlyUpload = sender.isOn;
+}
+
+- (void)lockedPhotosBiometricSwitchChanged:(UISwitch *)sender {
+	IMPrefs.shared.lockedPhotosBiometricEnabled = sender.isOn;
 }
 
 - (void)allowInsecureTLSSwitchChanged:(UISwitch *)sender {
@@ -210,7 +444,7 @@ static NSString *const kActionCellId = @"action";
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	switch (section) {
 		case IMSettingsSectionAccount:
-			return IMAccountRowCount;
+			return IMAccountRowCount - (self.user.isAdmin ? 0 : 1);
 		case IMSettingsSectionServer:
 			return IMServerRowCount;
 		case IMSettingsSectionPreferences:
@@ -268,18 +502,107 @@ static NSString *const kActionCellId = @"action";
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	switch (indexPath.section) {
-		case IMSettingsSectionAccount:
-			switch (indexPath.row) {
+		case IMSettingsSectionAccount: {
+			NSInteger accountRow = indexPath.row;
+			if (!self.user.isAdmin && accountRow >= IMAccountRowAdministration) accountRow++;
+			switch (accountRow) {
 				case IMAccountRowName:
-					return [self valueCellWithTitle:_(@"Name") detail:self.user.name ?: @"—"];
+					{ UITableViewCell *cell = [self valueCellWithTitle:_(@"Name") detail:self.user.name ?: @"—"]; cell.selectionStyle = UITableViewCellSelectionStyleDefault; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return cell; }
 				case IMAccountRowEmail:
-					return [self valueCellWithTitle:_(@"Email") detail:self.user.email ?: @"—"];
+					{ UITableViewCell *cell = [self valueCellWithTitle:_(@"Email") detail:self.user.email ?: @"—"]; cell.selectionStyle = UITableViewCellSelectionStyleDefault; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return cell; }
+				case IMAccountRowProfileImage: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Profile Photo") detail:self.user.profileImagePath.length ? _(@"Set") : _(@"Not set")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					cell.imageView.image = self.profileImage;
+					cell.imageView.layer.cornerRadius = 20.0;
+					cell.imageView.layer.masksToBounds = YES;
+					return cell;
+				}
 				case IMAccountRowStorage: {
 					NSString *detail = self.user.quotaSizeInBytes > 0
 					    ? [NSString stringWithFormat:_(@"%@ of %@"), [self formattedBytes:self.user.quotaUsageInBytes],
 					                                  [self formattedBytes:self.user.quotaSizeInBytes]]
 					    : [NSString stringWithFormat:_(@"%@ (unlimited)"), [self formattedBytes:self.user.quotaUsageInBytes]];
 					return [self valueCellWithTitle:_(@"Storage Used") detail:self.user ? detail : @"—"];
+				}
+					case IMAccountRowSecurity: {
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Security") detail:_(@"Password, devices, and API keys")];
+						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+						return cell;
+					}
+					case IMAccountRowActivity: {
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Activity") detail:_(@"Heatmap, onboarding, and license")];
+						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+						return cell;
+					}
+					case IMAccountRowOAuth: {
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"OAuth Account") detail:_(@"Link or unlink your provider account")];
+						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+						return cell;
+					}
+				case IMAccountRowLockedPIN: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Locked Photos PIN") detail:_(@"Set, change, or remove PIN")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowTrash: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Trash") detail:_(@"Restore or permanently delete photos")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowSharedLinks: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Shared Links") detail:_(@"Manage public links")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowArchive: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Archive") detail:_(@"Photos removed from the timeline")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
+				}
+				case IMAccountRowHidden: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Hidden Photos") detail:_(@"Photos hidden from normal views")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
+				}
+				case IMAccountRowPartners: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Partner Sharing") detail:_(@"Share your library with another user")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowTags: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Tags") detail:_(@"Browse and organize tagged photos")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowFolders: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Folders") detail:_(@"Browse photos by original folder")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowAdministration: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Administration") detail:_(@"Manage server users")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowPeople: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"People") detail:_(@"Browse, name, and hide people")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+				case IMAccountRowDuplicates: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Duplicates") detail:_(@"Review and resolve duplicate photos")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
 				}
 				default: {
 					UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kActionCellId forIndexPath:indexPath];
@@ -289,8 +612,9 @@ static NSString *const kActionCellId = @"action";
 					}
 					cell.textLabel.textAlignment = NSTextAlignmentCenter;
 					return cell;
-				}
 			}
+		}
+		}
 		case IMSettingsSectionServer:
 			switch (indexPath.row) {
 				case IMServerRowURL:
@@ -307,8 +631,18 @@ static NSString *const kActionCellId = @"action";
 			switch (indexPath.row) {
 				case IMPreferencesRowWifiOnly:
 					return [self switchCellWithTitle:_(@"Wi-Fi Only Upload")
-					                               on:IMPrefs.shared.wifiOnlyUpload
-					                           action:@selector(wifiOnlySwitchChanged:)];
+				                               on:IMPrefs.shared.wifiOnlyUpload
+				                           action:@selector(wifiOnlySwitchChanged:)];
+				case IMPreferencesRowLockedPhotosBiometric:
+					return [self switchCellWithTitle:_(@"Biometric Unlock for Locked Photos")
+				                               on:IMPrefs.shared.lockedPhotosBiometricEnabled
+				                           action:@selector(lockedPhotosBiometricSwitchChanged:)];
+				case IMPreferencesRowUserPreferences: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"User Preferences") detail:_(@"Email, memories, people, and library defaults")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
 				case IMPreferencesRowThumbnailQuality: {
 					BOOL high = [IMPrefs.shared.thumbnailQuality isEqualToString:IMAssetMediaSizePreview];
 					UITableViewCell *cell = [self valueCellWithTitle:_(@"Thumbnail Quality")
@@ -336,9 +670,16 @@ static NSString *const kActionCellId = @"action";
 				case IMAboutRowAppVersion:
 					return [self valueCellWithTitle:_(@"App Version")
 					                            detail:[NSString stringWithFormat:@"%s (%s)", APP_VERSION_STRING, APP_COMMIT_HASH]];
-				default:
+				case IMAboutRowServerVersion:
 					return [self valueCellWithTitle:_(@"Server Version") detail:self.serverVersion ?: @"—"];
-			}
+				default: {
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Android App Downloads")
+					                                            detail:_(@"Download the APK for this server version")];
+					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+		}
 	}
 }
 
@@ -346,8 +687,76 @@ static NSString *const kActionCellId = @"action";
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section == IMSettingsSectionAccount && indexPath.row == IMAccountRowLogOut) {
+	NSInteger accountRow = indexPath.row;
+	if (indexPath.section == IMSettingsSectionAccount && !self.user.isAdmin && accountRow >= IMAccountRowAdministration) accountRow++;
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowLogOut) {
 		[self logOutTapped];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && (accountRow == IMAccountRowName || accountRow == IMAccountRowEmail)) {
+		[self editProfileTapped];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowProfileImage) {
+		[self profileImageTapped];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowPartners) {
+		[self.navigationController pushViewController:[[PartnersViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowTags) {
+		[self.navigationController pushViewController:[[TagsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowFolders) {
+		[self.navigationController pushViewController:[[FoldersViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowPeople) {
+		[self.navigationController pushViewController:[[PeopleViewController alloc] init] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowDuplicates) {
+		[self.navigationController pushViewController:[[DuplicatesViewController alloc] init] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowLockedPIN) {
+		[self manageLockedPIN];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowSecurity) {
+		[self.navigationController pushViewController:[[AccountSecurityViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowActivity) {
+		[self.navigationController pushViewController:[[AccountActivityViewController alloc] init] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowOAuth) {
+		[self.navigationController pushViewController:[[OAuthAccountViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowTrash) {
+		[self.navigationController pushViewController:[[TrashViewController alloc] init] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowSharedLinks) {
+		[self.navigationController pushViewController:[[SharedLinksViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowArchive) {
+		[self.navigationController pushViewController:[[VisibilityViewController alloc] initWithVisibility:@"archive" title:_(@"Archive")] animated:YES]; return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowHidden) {
+		[self.navigationController pushViewController:[[VisibilityViewController alloc] initWithVisibility:@"hidden" title:_(@"Hidden Photos")] animated:YES]; return;
+	}
+	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowAdministration && self.user.isAdmin) {
+		[self.navigationController pushViewController:[[AdminUsersViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+		return;
+	}
+	if (indexPath.section == IMSettingsSectionPreferences && indexPath.row == IMPreferencesRowUserPreferences) {
+		[self.navigationController pushViewController:[[UserPreferencesViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
 		return;
 	}
 	if (indexPath.section == IMSettingsSectionPreferences && indexPath.row == IMPreferencesRowThumbnailQuality) {
@@ -358,6 +767,47 @@ static NSString *const kActionCellId = @"action";
 		[self clearCacheTapped];
 		return;
 	}
+	if (indexPath.section == IMSettingsSectionAbout && indexPath.row == IMAboutRowAndroidDownloads) {
+		[self.navigationController pushViewController:[[ServerApkLinksViewController alloc] initWithStyle:UITableViewStyleInsetGrouped]
+		                                     animated:YES];
+		return;
+	}
+}
+
+- (void)manageLockedPIN {
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Locked Photos PIN") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Set PIN") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Set PIN") message:_(@"Choose a six-digit PIN.") preferredStyle:UIAlertControllerStyleAlert];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder = _(@"Six-digit PIN"); f.keyboardType = UIKeyboardTypeNumberPad; f.secureTextEntry = YES; }];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a2){ [IMAuthApi setupPIN:alert.textFields.firstObject.text completion:^(BOOL ok, NSError *e){ if (!ok) dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPINError:e]; }); }]; }]];
+		[weakSelf presentViewController:alert animated:YES completion:nil];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Change PIN") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Change PIN") message:nil preferredStyle:UIAlertControllerStyleAlert];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder = _(@"Current PIN"); f.keyboardType = UIKeyboardTypeNumberPad; f.secureTextEntry = YES; }];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder = _(@"New six-digit PIN"); f.keyboardType = UIKeyboardTypeNumberPad; f.secureTextEntry = YES; }];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a2){ [IMAuthApi changePIN:alert.textFields[1].text currentPIN:alert.textFields[0].text password:nil completion:^(BOOL ok, NSError *e){ if (!ok) dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPINError:e]; }); }]; }]];
+		[weakSelf presentViewController:alert animated:YES completion:nil];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Remove PIN") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Remove PIN") message:_(@"Enter your account password to confirm.") preferredStyle:UIAlertControllerStyleAlert];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *f){ f.placeholder = _(@"Password"); f.secureTextEntry = YES; }];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Remove") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a2){ [IMAuthApi resetPINWithPassword:alert.textFields.firstObject.text pin:nil completion:^(BOOL ok, NSError *e){ if (!ok) dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPINError:e]; }); }]; }]];
+		[weakSelf presentViewController:alert animated:YES completion:nil];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) { sheet.popoverPresentationController.sourceView = self.view; sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMaxY(self.view.bounds), 1, 1); }
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)showPINError:(NSError *)error {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"PIN Update Failed") message:error.localizedDescription ?: _(@"The server rejected the PIN change.") preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 @end

@@ -74,6 +74,37 @@
 	</array>
 	<key>UIStatusBarStyle</key>
 	<string>UIStatusBarStyleDefault</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>None</string>
+			<key>CFBundleURLName</key>
+			<string>com.lns.immich-ios-14.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app.immich</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.lns.immich-ios-14.shared-link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>immich-share</string>
+			</array>
+		</dict>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.lns.immich-ios-14.backup</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -83,5 +114,7 @@
 	<string>Immich 14 needs access to your photo library to back up and sync your photos and videos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Immich 14 needs access to save photos and videos to your library.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Immich 14 uses Face ID to protect your locked photos.</string>
 </dict>
 </plist>

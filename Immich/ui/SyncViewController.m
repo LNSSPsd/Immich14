@@ -3,13 +3,14 @@
 #import "IMPhotoLibrary.h"
 #import "IMDatabase.h"
 #import "IMPrefs.h"
+#import "IMBackupDaemon.h"
 #import "LocalAssetGridViewController.h"
 #import "common.h"
 #import <Photos/Photos.h>
 
 static PHAuthorizationStatus IMPhotoReadWriteAuthStatus(void) {
 	if (@available(iOS 14.0, *)) {
-		return IMPhotoReadWriteAuthStatus();
+		return [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
 	}
 	return [PHPhotoLibrary authorizationStatus];
 }
@@ -163,7 +164,7 @@ static NSString *const kActionCellId = @"action";
 		[IMForegroundSync.shared cancel];
 		return;
 	}
-	[IMForegroundSync.shared startWithProgress:nil completion:nil];
+	[IMBackupDaemon.shared runCheckNow];
 	[self.tableView reloadData];
 }
 

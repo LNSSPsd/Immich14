@@ -9,6 +9,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, readonly) NSString *originalFileName;
 @property (nonatomic, readonly) NSInteger width;
 @property (nonatomic, readonly) NSInteger height;
+@property (nonatomic, readonly) NSInteger exifWidth;
+@property (nonatomic, readonly) NSInteger exifHeight;
 @property (nonatomic, copy, readonly, nullable) NSString *fileCreatedAt; 
 
 @property (nonatomic, copy, readonly, nullable) NSString *cameraMake;

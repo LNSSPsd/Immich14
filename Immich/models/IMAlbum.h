@@ -9,6 +9,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSInteger assetCount;
 @property (nonatomic, copy, readonly, nullable) NSString *thumbnailAssetId;
 @property (nonatomic, copy, readonly, nullable) NSString *order;
+@property (nonatomic, copy, readonly) NSString *albumDescription;
+@property (nonatomic, readonly) BOOL activityEnabled;
+@property (nonatomic, readonly) BOOL shared;
+@property (nonatomic, copy, readonly) NSDictionary<NSString *, NSString *> *rolesByUserId;
+- (nullable NSString *)roleForUserId:(nullable NSString *)userId;
 
 + (nullable instancetype)albumWithDictionary:(NSDictionary *)dict;
 + (NSArray<IMAlbum *> *)albumsWithArray:(NSArray *)array;
