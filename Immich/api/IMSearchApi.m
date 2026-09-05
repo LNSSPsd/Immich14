@@ -476,6 +476,15 @@ static const NSInteger kIMPeoplePageSize = 1000;
 	return [self postSearch:@"/search/metadata" body:@{ @"tagIds": @[ tagId ?: @"" ] } page:page completion:completion];
 }
 
++ (nullable NSURLSessionTask *)metadataSearchWithFavorite:(BOOL)favorite
+                                                      page:(NSInteger)page
+                                                completion:(void (^)(NSArray<IMAsset *> *, NSString *, NSError *))completion {
+	return [self postSearch:@"/search/metadata"
+	                    body:@{ @"isFavorite": @(favorite) }
+	                     page:page
+	              completion:completion];
+}
+
 #pragma mark - People
 
 + (void)peopleAtPage:(NSInteger)page

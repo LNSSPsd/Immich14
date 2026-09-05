@@ -297,6 +297,11 @@ static const CGFloat kScopeBarHeight = 44;
 	                                                                  message:_(@"Find assets using the server's discovery indexes.")
 	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
 	__weak typeof(self) weakSelf = self;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Favorite photos")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadFavoriteAssets];
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Random photos")
 	                                          style:UIAlertActionStyleDefault
 	                                        handler:^(UIAlertAction *action) {
@@ -327,6 +332,26 @@ static const CGFloat kScopeBarHeight = 44;
 		sheet.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
 	}
 	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)loadFavoriteAssets {
+	[self.browseTask cancel];
+	self.browseTask = nil;
+	__weak typeof(self) weakSelf = self;
+	NSString *title = _(@"Favorite photos");
+	self.browseRetryAction = ^{
+		[weakSelf loadFavoriteAssets];
+	};
+	IMAssetGridPageLoader pageLoader = ^NSURLSessionTask *_Nullable(NSInteger page,
+	                                                                  void (^pageCompletion)(NSArray<IMAsset *> *_Nullable,
+	                                                                                         NSString *_Nullable,
+	                                                                                         NSError *_Nullable)) {
+		return [IMSearchApi metadataSearchWithFavorite:YES page:page completion:pageCompletion];
+	};
+	[self startBrowseTask:[IMSearchApi metadataSearchWithFavorite:YES
+	                                                           page:1
+	                                                     completion:[self browseCompletionWithTitle:title
+	                                                                                     pageLoader:pageLoader]]];
 }
 
 - (void)showDiscoveryError:(NSError *)error title:(NSString *)title {

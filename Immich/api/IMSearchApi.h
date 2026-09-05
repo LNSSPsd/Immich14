@@ -62,6 +62,10 @@ FOUNDATION_EXPORT NSString *const IMSearchSuggestionTypeCameraLensModel;
                                                 page:(NSInteger)page
                                           completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
 
++ (nullable NSURLSessionTask *)metadataSearchWithFavorite:(BOOL)favorite
+                                                      page:(NSInteger)page
+                                                completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
+
 + (void)peopleAtPage:(NSInteger)page
           completion:(void (^)(NSArray<IMPerson *> *_Nullable people, BOOL hasNextPage, NSError *_Nullable error))completion;
 
