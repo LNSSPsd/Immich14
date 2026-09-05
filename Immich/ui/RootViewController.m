@@ -24,7 +24,11 @@
 
 @interface RootViewController ()
 @property (nonatomic) BOOL forcedPasswordPromptVisible;
+@property (nonatomic) BOOL forcedPasswordRequestInFlight;
+@property (nonatomic) BOOL forcedPasswordPromptRetryScheduled;
+@property (nonatomic, copy, nullable) NSString *pendingForcedPasswordMessage;
 - (void)presentForcedPasswordPromptWithMessage:(nullable NSString *)message;
+- (void)scheduleForcedPasswordPromptRetry;
 @end
 
 @implementation RootViewController
@@ -89,17 +93,40 @@
 
 - (void)viewDidAppear:(BOOL)animated {
 	[super viewDidAppear:animated];
-	if ([IMSession shared].isLoggedIn && [IMSession shared].passwordChangeRequired &&
-	    !self.forcedPasswordPromptVisible && !self.presentedViewController) {
+	if (![IMSession shared].isLoggedIn || ![IMSession shared].passwordChangeRequired) {
+		self.pendingForcedPasswordMessage = nil;
+		self.tabBar.userInteractionEnabled = YES;
+		return;
+	}
+	if (self.forcedPasswordPromptVisible && !self.presentedViewController) {
+		self.forcedPasswordPromptVisible = NO;
+	}
+	if (!self.forcedPasswordPromptVisible && !self.forcedPasswordRequestInFlight) {
 		[self presentForcedPasswordPromptWithMessage:nil];
 	}
 }
 
 - (void)presentForcedPasswordPromptWithMessage:(NSString *)message {
 	if (![IMSession shared].isLoggedIn || ![IMSession shared].passwordChangeRequired ||
-	    self.forcedPasswordPromptVisible || self.presentedViewController) {
+	    self.forcedPasswordPromptVisible || self.forcedPasswordRequestInFlight) {
 		return;
 	}
+	if (!self.viewIfLoaded.window) {
+		if (message.length > 0) self.pendingForcedPasswordMessage = message;
+		return;
+	}
+	self.tabBar.userInteractionEnabled = NO;
+	if (self.presentedViewController) {
+		if (message.length > 0) {
+			self.pendingForcedPasswordMessage = message;
+		}
+		[self scheduleForcedPasswordPromptRetry];
+		return;
+	}
+	if (message.length == 0 && self.pendingForcedPasswordMessage.length > 0) {
+		message = self.pendingForcedPasswordMessage;
+	}
+	self.pendingForcedPasswordMessage = nil;
 	self.forcedPasswordPromptVisible = YES;
 	NSString *promptMessage = message.length > 0
 	    ? message
@@ -128,7 +155,11 @@
 	                                         handler:^(UIAlertAction *action) {
 		(void)action;
 		RootViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
 		strongSelf.forcedPasswordPromptVisible = NO;
+		strongSelf.forcedPasswordRequestInFlight = NO;
+		strongSelf.pendingForcedPasswordMessage = nil;
+		strongSelf.tabBar.userInteractionEnabled = YES;
 		[[IMSession shared] logout];
 	}]];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"Change Password")
@@ -151,11 +182,13 @@
 		}
 		if (validationMessage.length > 0) {
 			strongSelf.forcedPasswordPromptVisible = NO;
-			dispatch_async(dispatch_get_main_queue(), ^{
-				[strongSelf presentForcedPasswordPromptWithMessage:validationMessage];
-			});
+			strongSelf.pendingForcedPasswordMessage = validationMessage;
+			[strongSelf scheduleForcedPasswordPromptRetry];
 			return;
 		}
+		strongSelf.forcedPasswordPromptVisible = NO;
+		strongSelf.forcedPasswordRequestInFlight = YES;
+		strongSelf.tabBar.userInteractionEnabled = NO;
 		[IMAccountApi changePassword:current
 		                 newPassword:newPassword
 		            invalidateSessions:NO
@@ -163,6 +196,8 @@
 			RootViewController *inner = weakSelf;
 			if (!inner) return;
 			if (success && !error) {
+				inner.forcedPasswordRequestInFlight = NO;
+				inner.tabBar.userInteractionEnabled = YES;
 				[IMSession.shared clearPasswordChangeRequirement];
 				inner.forcedPasswordPromptVisible = NO;
 				UIAlertController *confirmationAlert = [UIAlertController alertControllerWithTitle:_(@"Password changed")
@@ -172,6 +207,8 @@
 				[inner presentViewController:confirmationAlert animated:YES completion:nil];
 				return;
 			}
+			inner.forcedPasswordRequestInFlight = NO;
+			inner.tabBar.userInteractionEnabled = YES;
 			inner.forcedPasswordPromptVisible = NO;
 			NSString *errorMessage = error.localizedDescription.length > 0
 			    ? error.localizedDescription
@@ -180,6 +217,32 @@
 		}];
 	}]];
 	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)scheduleForcedPasswordPromptRetry {
+	if (self.forcedPasswordPromptRetryScheduled) {
+		return;
+	}
+	self.forcedPasswordPromptRetryScheduled = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+	               dispatch_get_main_queue(), ^{
+		RootViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		strongSelf.forcedPasswordPromptRetryScheduled = NO;
+		if (strongSelf.presentedViewController) {
+			if ([IMSession shared].isLoggedIn && [IMSession shared].passwordChangeRequired) {
+				[strongSelf scheduleForcedPasswordPromptRetry];
+			} else {
+				strongSelf.pendingForcedPasswordMessage = nil;
+				strongSelf.tabBar.userInteractionEnabled = YES;
+			}
+			return;
+		}
+		NSString *message = strongSelf.pendingForcedPasswordMessage;
+		strongSelf.pendingForcedPasswordMessage = nil;
+		[strongSelf presentForcedPasswordPromptWithMessage:message];
+	});
 }
 
 - (void)dealloc {

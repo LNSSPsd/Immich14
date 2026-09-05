@@ -113,6 +113,21 @@ static void IMRemoveDaemonRunFile(void) {
 	}
 }
 
+static pid_t IMReadDaemonPID(void) {
+	NSString *path = IMDaemonRunFilePath();
+	if (path.length == 0) {
+		return 0;
+	}
+	int fd = open(path.fileSystemRepresentation, O_RDONLY);
+	if (fd < 0) {
+		return 0;
+	}
+	pid_t pid = 0;
+	ssize_t bytes = read(fd, &pid, sizeof(pid));
+	close(fd);
+	return bytes == sizeof(pid) && pid > 0 ? pid : 0;
+}
+
 static BOOL IMWriteDaemonPIDFile(void) {
 	NSString *path = IMDaemonRunFilePath();
 	int fd = open(path.fileSystemRepresentation, O_RDWR | O_CREAT | O_EXCL, 0600);
@@ -168,6 +183,10 @@ static BOOL IMWriteDaemonPIDFile(void) {
 - (void)runNowAllowingCheckOnly:(BOOL)allowCheckOnly retryBackoffBypass:(BOOL)retryBackoffBypass;
 - (void)finishRunAfterSessionChange;
 @end
+
+BOOL IMBackupDaemonIsDaemonProcess(void) {
+	return gRunningAsDaemonProcess;
+}
 
 @implementation IMBackupDaemon
 
@@ -378,6 +397,11 @@ static BOOL IMWriteDaemonPIDFile(void) {
 
 - (void)sessionDidChange:(NSNotification *)notification {
 	(void)notification;
+	NSString *activeFingerprint = self.activeRunSessionFingerprint;
+	if (activeFingerprint.length > 0 &&
+	    ![activeFingerprint isEqualToString:IMBackupSessionFingerprint()]) {
+		[IMForegroundSync.shared cancel];
+	}
 	if (!IMSession.shared.isLoggedIn) {
 		[IMForegroundSync.shared cancel];
 		[self cancelScheduledTask];
@@ -727,7 +751,10 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 	if (gRunningAsDaemonProcess || !IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) {
 		return;
 	}
-	if (gSpawnedDaemonPID > 0 && kill(gSpawnedDaemonPID, 0) == 0) {
+	pid_t knownPID = gSpawnedDaemonPID > 0 ? gSpawnedDaemonPID : IMReadDaemonPID();
+	if (knownPID > 0 && knownPID != getpid() &&
+	    (kill(knownPID, 0) == 0 || errno == EPERM)) {
+		gSpawnedDaemonPID = knownPID;
 		return;
 	}
 	char executable[PATH_MAX];
@@ -791,10 +818,15 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 }
 
 - (void)stopPrivilegedDaemon {
-	if (gSpawnedDaemonPID > 0) {
-		(void)kill(gSpawnedDaemonPID, SIGTERM);
-		gSpawnedDaemonPID = 0;
+	pid_t pid = gSpawnedDaemonPID > 0 ? gSpawnedDaemonPID : IMReadDaemonPID();
+	if (pid > 0 && pid != getpid()) {
+		if (kill(pid, 0) == 0 || errno == EPERM) {
+			(void)kill(pid, SIGTERM);
+		} else if (errno == ESRCH) {
+			IMRemoveDaemonRunFile();
+		}
 	}
+	gSpawnedDaemonPID = 0;
 }
 
 - (void)runDaemonProcess {

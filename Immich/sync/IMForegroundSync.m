@@ -80,6 +80,7 @@ static NSError *IMSyncSessionChangedError(void) {
 @property (nonatomic) BOOL cancelled;
 @property (nonatomic) BOOL ignoreRetryBackoff;
 @property (nonatomic, copy, nullable) NSString *runSessionFingerprint;
+@property (nonatomic) BOOL uploadsEnabledForRun;
 @property (nonatomic, strong, nullable) NSObject *runToken;
 - (BOOL)ensureCurrentRunToken:(NSObject *)token;
 - (BOOL)ensureMutableRunToken:(NSObject *)token;
@@ -194,6 +195,11 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.progressBlock = progress;
 	self.completionBlock = completion;
 	self.ignoreRetryBackoff = ignoreRetryBackoff;
+	if (IMBackupDaemonIsDaemonProcess()) {
+		[IMPrefs.shared reloadFromPersistence];
+		[IMSession.shared reloadFromPersistence];
+	}
+	self.uploadsEnabledForRun = IMPrefs.shared.backupEnabled;
 	self.runSessionFingerprint = IMSyncSessionFingerprint();
 	NSString *runSessionFingerprint = [self.runSessionFingerprint copy];
 	NSObject *runToken = [[NSObject alloc] init];
@@ -287,11 +293,22 @@ static NSError *IMSyncSessionChangedError(void) {
 }
 
 - (BOOL)ensureCurrentRunToken:(NSObject *)runToken {
+	if (IMBackupDaemonIsDaemonProcess()) {
+		[IMPrefs.shared reloadFromPersistence];
+		[IMSession.shared reloadFromPersistence];
+	}
 	if (!self.running || runToken != self.runToken) {
 		return NO;
 	}
 	NSString *captured = self.runSessionFingerprint;
 	if (captured.length > 0 && [captured isEqualToString:IMSyncSessionFingerprint()]) {
+		if (self.uploadsEnabledForRun && !IMPrefs.shared.backupEnabled) {
+			self.cancelled = YES;
+			[self finishWithError:[NSError errorWithDomain:IMForegroundSyncErrorDomain
+			                                            code:IMForegroundSyncErrorCancelled
+			                                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Backup disabled — sync cancelled.") }]];
+			return NO;
+		}
 		return YES;
 	}
 	self.cancelled = YES;
@@ -319,6 +336,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	NSString *sessionFingerprint = self.runSessionFingerprint;
 	BOOL sessionMatches = sessionFingerprint.length > 0 &&
 	    [sessionFingerprint isEqualToString:IMSyncSessionFingerprint()];
+	[[IMDatabase shared] resetUploadingStates];
 	self.running = NO;
 	if (sessionMatches) {
 		[self postPendingBucketChanges];
@@ -329,6 +347,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.completionBlock = nil;
 	self.progressBlock = nil;
 	self.runSessionFingerprint = nil;
+	self.uploadsEnabledForRun = NO;
 	self.runToken = nil;
 	if (completion) {
 		completion(error);

@@ -36,4 +36,6 @@ extern NSString *const IMBackupTaskIdentifier;
 
 int IMBackupDaemonMain(void);
 
+BOOL IMBackupDaemonIsDaemonProcess(void);
+
 NS_ASSUME_NONNULL_END

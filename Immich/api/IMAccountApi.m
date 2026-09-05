@@ -1,5 +1,6 @@
 #import "IMAccountApi.h"
 #import "IMApiClient.h"
+#import "IMAdminUser.h"
 #import "common.h"
 
 static BOOL IMAccountSessionResponseIsValid(id value) {
@@ -42,7 +43,17 @@ static NSString *IMAccountPathComponent(NSString *value) {
 	}
 	NSDictionary *body = @{ @"password": currentPassword, @"newPassword": newPassword, @"invalidateSessions": @(invalidateSessions) };
 	[[IMApiClient shared] POST:@"/auth/change-password" body:body completion:^(id json, NSError *error) {
-		completion(error == nil, error);
+		if (error) {
+			completion(NO, error);
+			return;
+		}
+		if (![IMAdminUser userWithResponseDictionary:json]) {
+			completion(NO, [NSError errorWithDomain:IMApiErrorDomain
+			                                  code:2
+			                              userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid password-change response.")}]);
+			return;
+		}
+		completion(YES, nil);
 	}];
 }
 

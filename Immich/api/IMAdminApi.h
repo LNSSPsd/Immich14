@@ -10,6 +10,12 @@ NS_ASSUME_NONNULL_BEGIN
 @interface IMAdminApi : NSObject
 + (void)usersIncludingDeleted:(BOOL)includingDeleted completion:(void (^)(NSArray<IMAdminUser *> *_Nullable users, NSError *_Nullable error))completion;
 + (void)createUserWithEmail:(NSString *)email name:(NSString *)name password:(NSString *)password isAdmin:(BOOL)isAdmin completion:(void (^)(IMAdminUser *_Nullable user, NSError *_Nullable error))completion;
++ (void)createUserWithEmail:(NSString *)email
+                       name:(NSString *)name
+                   password:(NSString *)password
+                    isAdmin:(BOOL)isAdmin
+           quotaSizeInBytes:(nullable NSNumber *)quotaSizeInBytes
+                 completion:(void (^)(IMAdminUser *_Nullable user, NSError *_Nullable error))completion;
 + (void)userWithId:(NSString *)userId completion:(void (^)(IMAdminUser *_Nullable user, NSError *_Nullable error))completion;
 + (void)updateUserId:(NSString *)userId isAdmin:(BOOL)isAdmin completion:(void (^)(IMAdminUser *_Nullable user, NSError *_Nullable error))completion;
 + (void)updateUserId:(NSString *)userId

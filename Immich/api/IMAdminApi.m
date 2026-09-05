@@ -197,12 +197,38 @@ static IMAdminUser *IMAdminParseUser(id json) {
 }
 
 + (void)createUserWithEmail:(NSString *)email name:(NSString *)name password:(NSString *)password isAdmin:(BOOL)isAdmin completion:(void (^)(IMAdminUser *, NSError *))completion {
+	[self createUserWithEmail:email
+	                     name:name
+	                 password:password
+	                  isAdmin:isAdmin
+	         quotaSizeInBytes:nil
+	               completion:completion];
+}
+
++ (void)createUserWithEmail:(NSString *)email
+	                     name:(NSString *)name
+	                 password:(NSString *)password
+	                  isAdmin:(BOOL)isAdmin
+	         quotaSizeInBytes:(NSNumber *)quotaSizeInBytes
+	               completion:(void (^)(IMAdminUser *, NSError *))completion {
 	if (!IMAdminEmailIsValid(email) || ![name isKindOfClass:[NSString class]] || name.length == 0 ||
 	    ![password isKindOfClass:[NSString class]] || password.length == 0) {
 		completion(nil, IMAdminValidationError(_(@"Enter a valid email, name, and password.")));
 		return;
 	}
-	NSDictionary *body = @{ @"email": email ?: @"", @"name": name ?: @"", @"password": password ?: @"", @"isAdmin": @(isAdmin), @"notify": @NO, @"shouldChangePassword": @NO };
+	if (quotaSizeInBytes && !IMAdminQuotaValue(quotaSizeInBytes)) {
+		completion(nil, IMAdminValidationError(_(@"Quota must be a non-negative number of bytes.")));
+		return;
+	}
+	NSMutableDictionary *body = [@{
+		@"email": email ?: @"",
+		@"name": name ?: @"",
+		@"password": password ?: @"",
+		@"isAdmin": @(isAdmin),
+		@"notify": @NO,
+		@"shouldChangePassword": @NO
+	} mutableCopy];
+	if (quotaSizeInBytes) body[@"quotaSizeInBytes"] = quotaSizeInBytes;
 	[[IMApiClient shared] POST:@"/admin/users" body:body completion:^(id json, NSError *error) {
 		if (error) {
 			completion(nil, error);

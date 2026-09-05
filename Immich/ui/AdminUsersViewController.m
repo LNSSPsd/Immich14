@@ -126,14 +126,28 @@ static NSError *IMAdminUIError(NSString *message) {
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Email"); field.keyboardType = UIKeyboardTypeEmailAddress; field.autocapitalizationType = UITextAutocapitalizationTypeNone; }];
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Name"); }];
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Password"); field.secureTextEntry = YES; }];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Quota bytes (blank = unlimited)");
+		field.keyboardType = UIKeyboardTypeNumberPad;
+	}];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
 	__weak typeof(self) weakSelf = self;
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"Create") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
 		NSString *email = [alert.textFields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 		NSString *name = [alert.textFields[1].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 		NSString *password = alert.textFields[2].text ?: @"";
-		if (!email.length || !name.length || password.length < 1) return;
-		[IMAdminApi createUserWithEmail:email name:name password:password isAdmin:NO completion:^(IMAdminUser *user, NSError *error) {
+		NSString *quotaText = alert.textFields[3].text ?: @"";
+		BOOL quotaValid = NO;
+		NSNumber *quota = [weakSelf quotaNumberFromText:quotaText valid:&quotaValid];
+		if (!quotaValid) {
+			[weakSelf showError:[NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Quota must be a non-negative number of bytes.")}]];
+			return;
+		}
+		if (!email.length || !name.length || password.length < 1) {
+			[weakSelf showError:[NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Enter an email, name, and password.")}]];
+			return;
+		}
+		[IMAdminApi createUserWithEmail:email name:name password:password isAdmin:NO quotaSizeInBytes:quota completion:^(IMAdminUser *user, NSError *error) {
 			if (error || !user) { dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showError:error]; }); return; }
 			[weakSelf reload];
 		}];
