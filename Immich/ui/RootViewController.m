@@ -19,6 +19,13 @@
 #import "NotificationsViewController.h"
 #import "IMNotificationApi.h"
 #import "IMUserPreferencesApi.h"
+#import "IMSession.h"
+#import "IMAccountApi.h"
+
+@interface RootViewController ()
+@property (nonatomic) BOOL forcedPasswordPromptVisible;
+- (void)presentForcedPasswordPromptWithMessage:(nullable NSString *)message;
+@end
 
 @implementation RootViewController
 
@@ -78,6 +85,101 @@
 	[self updateNotificationsBadge];
 
 	[self prefetchTabData];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+	[super viewDidAppear:animated];
+	if ([IMSession shared].isLoggedIn && [IMSession shared].passwordChangeRequired &&
+	    !self.forcedPasswordPromptVisible && !self.presentedViewController) {
+		[self presentForcedPasswordPromptWithMessage:nil];
+	}
+}
+
+- (void)presentForcedPasswordPromptWithMessage:(NSString *)message {
+	if (![IMSession shared].isLoggedIn || ![IMSession shared].passwordChangeRequired ||
+	    self.forcedPasswordPromptVisible || self.presentedViewController) {
+		return;
+	}
+	self.forcedPasswordPromptVisible = YES;
+	NSString *promptMessage = message.length > 0
+	    ? message
+	    : _(@"Your administrator requires a password change before you can continue.");
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Change your password")
+	                                                                 message:promptMessage
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Current password");
+		field.secureTextEntry = YES;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"New password (8+ characters)");
+		field.secureTextEntry = YES;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Confirm new password");
+		field.secureTextEntry = YES;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Sign Out")
+	                                           style:UIAlertActionStyleDestructive
+	                                         handler:^(UIAlertAction *action) {
+		(void)action;
+		RootViewController *strongSelf = weakSelf;
+		strongSelf.forcedPasswordPromptVisible = NO;
+		[[IMSession shared] logout];
+	}]];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Change Password")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		(void)action;
+		RootViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSArray<UITextField *> *fields = alert.textFields;
+		NSString *current = fields.count > 0 ? (fields[0].text ?: @"") : @"";
+		NSString *newPassword = fields.count > 1 ? (fields[1].text ?: @"") : @"";
+		NSString *confirmation = fields.count > 2 ? (fields[2].text ?: @"") : @"";
+		NSString *validationMessage = nil;
+		if (current.length == 0) {
+			validationMessage = _(@"Enter your current password.");
+		} else if (newPassword.length < 8) {
+			validationMessage = _(@"The new password must contain at least 8 characters.");
+		} else if (![newPassword isEqualToString:confirmation]) {
+			validationMessage = _(@"The new passwords do not match.");
+		}
+		if (validationMessage.length > 0) {
+			strongSelf.forcedPasswordPromptVisible = NO;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[strongSelf presentForcedPasswordPromptWithMessage:validationMessage];
+			});
+			return;
+		}
+		[IMAccountApi changePassword:current
+		                 newPassword:newPassword
+		            invalidateSessions:NO
+		                   completion:^(BOOL success, NSError *_Nullable error) {
+			RootViewController *inner = weakSelf;
+			if (!inner) return;
+			if (success && !error) {
+				[IMSession.shared clearPasswordChangeRequirement];
+				inner.forcedPasswordPromptVisible = NO;
+				UIAlertController *confirmationAlert = [UIAlertController alertControllerWithTitle:_(@"Password changed")
+				                                                                  message:_(@"Your password has been updated.")
+				                                                           preferredStyle:UIAlertControllerStyleAlert];
+				[confirmationAlert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+				[inner presentViewController:confirmationAlert animated:YES completion:nil];
+				return;
+			}
+			inner.forcedPasswordPromptVisible = NO;
+			NSString *errorMessage = error.localizedDescription.length > 0
+			    ? error.localizedDescription
+			    : _(@"The server rejected the password change.");
+			[inner presentForcedPasswordPromptWithMessage:errorMessage];
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)dealloc {

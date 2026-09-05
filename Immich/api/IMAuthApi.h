@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "IMAdminUser.h"
+#import "IMOAuth.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -11,6 +12,12 @@ NS_ASSUME_NONNULL_BEGIN
                         password:(NSString *)password
                       completion:(void (^)(IMAdminUser *_Nullable user,
                                            NSError *_Nullable error))completion;
+
++ (void)loginWithBaseURL:(NSURL *)baseURL
+                    email:(NSString *)email
+                 password:(NSString *)password
+        responseCompletion:(void (^)(IMOAuthLoginResponse *_Nullable response,
+                                     NSError *_Nullable error))completion;
 
 + (void)loginWithBaseURL:(NSURL *)baseURL
                     email:(NSString *)email

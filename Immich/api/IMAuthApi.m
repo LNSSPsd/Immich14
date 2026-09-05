@@ -75,27 +75,40 @@ static BOOL IMAuthSignupBaseURLIsValid(NSURL *baseURL) {
 + (void)loginWithBaseURL:(NSURL *)baseURL
                     email:(NSString *)email
                  password:(NSString *)password
-               completion:(void (^)(BOOL success, NSError *_Nullable error))completion {
+        responseCompletion:(void (^)(IMOAuthLoginResponse *_Nullable response,
+                                     NSError *_Nullable error))completion {
 	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
 	[client POST:@"/auth/login"
-	        body:@{ @"email": email, @"password": password }
+	        body:@{ @"email": email ?: @"", @"password": password ?: @"" }
 	  completion:^(id _Nullable json, NSError *_Nullable error) {
-		    [client invalidate];
-			if (error || ![json isKindOfClass:[NSDictionary class]]) {
-				completion(NO, error ?: IMAuthMalformedResponse(_(@"The server returned an invalid login response.")));
-				return;
-			}
-		    NSDictionary *dict = (NSDictionary *)json;
-		    NSString *token = dict[@"accessToken"];
-		    NSString *userId = dict[@"userId"];
-			if (![token isKindOfClass:[NSString class]] || token.length == 0 ||
-			    ![userId isKindOfClass:[NSString class]] || userId.length == 0) {
-				completion(NO, IMAuthMalformedResponse(_(@"The server returned an invalid login response.")));
-			    return;
-		    }
-		    [[IMSession shared] startWithBaseURL:baseURL accessToken:token userId:userId];
-		    completion(YES, nil);
-	    }];
+		[client invalidate];
+		if (error) {
+			completion(nil, error);
+			return;
+		}
+		IMOAuthLoginResponse *response = [IMOAuthLoginResponse responseWithDictionary:json];
+		if (!response) {
+			completion(nil, IMAuthMalformedResponse(_(@"The server returned an invalid login response.")));
+			return;
+		}
+		[[IMSession shared] startWithBaseURL:baseURL
+		                       accessToken:response.accessToken
+		                            userId:response.userId
+		             passwordChangeRequired:response.shouldChangePassword];
+		completion(response, nil);
+	}];
+}
+
++ (void)loginWithBaseURL:(NSURL *)baseURL
+                    email:(NSString *)email
+                 password:(NSString *)password
+               completion:(void (^)(BOOL success, NSError *_Nullable error))completion {
+	[self loginWithBaseURL:baseURL
+	                 email:email
+	              password:password
+	     responseCompletion:^(IMOAuthLoginResponse *_Nullable response, NSError *_Nullable error) {
+		completion(response != nil, error);
+	}];
 }
 
 + (void)loginWithBaseURL:(NSURL *)baseURL

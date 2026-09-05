@@ -359,6 +359,7 @@ static BOOL IMWriteDaemonPIDFile(void) {
 		return;
 	}
 	if (!IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) {
+		[IMForegroundSync.shared cancel];
 		[self cancelScheduledTask];
 #if IM_TROLLSTORE
 		[self stopPrivilegedDaemon];

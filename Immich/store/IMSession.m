@@ -17,6 +17,7 @@ static NSString *const kKeychainAccount = @"accessToken";
 static NSString *const kDefaultsBaseURL = @"IMSessionBaseURL";
 static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 static NSString *const kDefaultsAuthKind = @"IMSessionAuthKind"; // "apiKey"; absent => Bearer
+static NSString *const kDefaultsPasswordChangeRequired = @"IMSessionPasswordChangeRequired";
 static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 
 static void IMClearAccountMediaCaches(void) {
@@ -35,6 +36,7 @@ static void IMClearAccountMediaCaches(void) {
 @property (nonatomic, copy, nullable) NSString *accessToken;
 @property (nonatomic, copy, nullable) NSString *userId;
 @property (nonatomic) IMSessionAuthKind authKind;
+@property (nonatomic) BOOL passwordChangeRequired;
 @end
 
 @implementation IMSession
@@ -61,6 +63,8 @@ static void IMClearAccountMediaCaches(void) {
 			_authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
 			    ? IMSessionAuthKindAPIKey
 			    : IMSessionAuthKindBearer;
+			_passwordChangeRequired = (_authKind == IMSessionAuthKindBearer) &&
+			                         [defaults boolForKey:kDefaultsPasswordChangeRequired];
 		}
 	}
 	return self;
@@ -83,18 +87,22 @@ static void IMClearAccountMediaCaches(void) {
 		self.authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
 		    ? IMSessionAuthKindAPIKey
 		    : IMSessionAuthKindBearer;
+		self.passwordChangeRequired = (self.authKind == IMSessionAuthKindBearer) &&
+		                              [defaults boolForKey:kDefaultsPasswordChangeRequired];
 	} else {
 		self.baseURL = nil;
 		self.accessToken = nil;
 		self.userId = nil;
 		self.authKind = IMSessionAuthKindBearer;
+		self.passwordChangeRequired = NO;
 	}
 }
 
 - (void)startWithBaseURL:(NSURL *)baseURL
                   secret:(NSString *)secret
                   userId:(nullable NSString *)userId
-                    kind:(IMSessionAuthKind)kind {
+                    kind:(IMSessionAuthKind)kind
+   passwordChangeRequired:(BOOL)passwordChangeRequired {
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults setObject:baseURL.absoluteString forKey:kDefaultsBaseURL];
 	if (userId) {
@@ -107,6 +115,7 @@ static void IMClearAccountMediaCaches(void) {
 	} else {
 		[defaults removeObjectForKey:kDefaultsAuthKind];
 	}
+	[defaults setBool:passwordChangeRequired forKey:kDefaultsPasswordChangeRequired];
 
 	[self setKeychainToken:secret];
 
@@ -114,16 +123,41 @@ static void IMClearAccountMediaCaches(void) {
 	self.accessToken = secret;
 	self.userId = userId;
 	self.authKind = kind;
+	self.passwordChangeRequired = passwordChangeRequired;
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];
 }
 
 - (void)startWithBaseURL:(NSURL *)baseURL accessToken:(NSString *)token userId:(NSString *)userId {
-	[self startWithBaseURL:baseURL secret:token userId:userId kind:IMSessionAuthKindBearer];
+	[self startWithBaseURL:baseURL
+	               secret:token
+	               userId:userId
+	                 kind:IMSessionAuthKindBearer
+	 passwordChangeRequired:NO];
+}
+
+- (void)startWithBaseURL:(NSURL *)baseURL
+             accessToken:(NSString *)token
+                  userId:(NSString *)userId
+   passwordChangeRequired:(BOOL)passwordChangeRequired {
+	[self startWithBaseURL:baseURL
+	               secret:token
+	               userId:userId
+	                 kind:IMSessionAuthKindBearer
+	 passwordChangeRequired:passwordChangeRequired];
 }
 
 - (void)startWithBaseURL:(NSURL *)baseURL apiKey:(NSString *)apiKey userId:(nullable NSString *)userId {
-	[self startWithBaseURL:baseURL secret:apiKey userId:userId kind:IMSessionAuthKindAPIKey];
+	[self startWithBaseURL:baseURL
+	               secret:apiKey
+	               userId:userId
+	                 kind:IMSessionAuthKindAPIKey
+	 passwordChangeRequired:NO];
+}
+
+- (void)clearPasswordChangeRequirement {
+	self.passwordChangeRequired = NO;
+	[[NSUserDefaults standardUserDefaults] removeObjectForKey:kDefaultsPasswordChangeRequired];
 }
 
 - (void)logout {
@@ -132,12 +166,14 @@ static void IMClearAccountMediaCaches(void) {
 	[defaults removeObjectForKey:kDefaultsBaseURL];
 	[defaults removeObjectForKey:kDefaultsUserId];
 	[defaults removeObjectForKey:kDefaultsAuthKind];
+	[defaults removeObjectForKey:kDefaultsPasswordChangeRequired];
 	[self deleteKeychainToken];
 
 	self.baseURL = nil;
 	self.accessToken = nil;
 	self.userId = nil;
 	self.authKind = IMSessionAuthKindBearer;
+	self.passwordChangeRequired = NO;
 
 	[[IMDatabase shared] clearAllData];
 	[[IMBackupQueue shared] reset];

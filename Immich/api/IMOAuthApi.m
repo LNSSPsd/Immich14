@@ -246,7 +246,10 @@ static NSDictionary *IMOAuthCallbackBody(NSURL *callbackURL,
 			completion(nil, IMOAuthMalformedResponseError(_(@"The server returned an invalid OAuth login response.")));
 			return;
 		}
-		[[IMSession shared] startWithBaseURL:baseURL accessToken:response.accessToken userId:response.userId];
+		[[IMSession shared] startWithBaseURL:baseURL
+		                       accessToken:response.accessToken
+		                            userId:response.userId
+		             passwordChangeRequired:response.shouldChangePassword];
 		completion(response, nil);
 	}];
 }

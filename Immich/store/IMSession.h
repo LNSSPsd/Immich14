@@ -16,6 +16,7 @@ typedef NS_ENUM(NSInteger, IMSessionAuthKind) {
 @property (nonatomic, copy, readonly, nullable) NSString *accessToken; 
 @property (nonatomic, copy, readonly, nullable) NSString *userId;
 @property (nonatomic, readonly) IMSessionAuthKind authKind; 
+@property (nonatomic, readonly) BOOL passwordChangeRequired;
 
 - (void)reloadFromPersistence;
 
@@ -24,8 +25,15 @@ typedef NS_ENUM(NSInteger, IMSessionAuthKind) {
                   userId:(NSString *)userId;
 
 - (void)startWithBaseURL:(NSURL *)baseURL
+             accessToken:(NSString *)token
+                  userId:(NSString *)userId
+   passwordChangeRequired:(BOOL)passwordChangeRequired;
+
+- (void)startWithBaseURL:(NSURL *)baseURL
                   apiKey:(NSString *)apiKey
                   userId:(nullable NSString *)userId;
+
+- (void)clearPasswordChangeRequirement;
 
 - (void)logout;
 

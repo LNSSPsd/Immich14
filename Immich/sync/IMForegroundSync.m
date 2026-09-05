@@ -426,7 +426,7 @@ static NSError *IMSyncSessionChangedError(void) {
 			    if (!strongSelf) {
 				    return;
 			    }
-			    if (![strongSelf ensureCurrentRunToken:runToken]) {
+			    if (![strongSelf ensureMutableRunToken:runToken]) {
 				    return;
 			    }
 			    if (checksums.count > 0) {
@@ -459,7 +459,7 @@ static NSError *IMSyncSessionChangedError(void) {
 }
 
 - (void)flushBatchThen:(void (^)(void))next token:(NSObject *)runToken {
-	if (![self ensureCurrentRunToken:runToken]) {
+	if (![self ensureMutableRunToken:runToken]) {
 		return;
 	}
 	NSArray<NSDictionary<NSString *, NSString *> *> *items = self.batchItems;
@@ -484,7 +484,7 @@ static NSError *IMSyncSessionChangedError(void) {
 		    if (!strongSelf) {
 			    return;
 		    }
-		    if (![strongSelf ensureCurrentRunToken:runToken]) {
+			if (![strongSelf ensureMutableRunToken:runToken]) {
 			    return;
 		    }
 
@@ -557,9 +557,9 @@ static NSError *IMSyncSessionChangedError(void) {
 		    [strongSelf uploadDeviceAssetIds:needsUpload
 		                          assetsById:assetsById
 		                                then:^{
-			    if (![strongSelf ensureCurrentRunToken:runToken]) {
-				    return;
-			    }
+				    if (![strongSelf ensureMutableRunToken:runToken]) {
+					    return;
+				    }
 			    [strongSelf postPendingBucketChanges];
 			    [strongSelf reportProgress];
 			    next();

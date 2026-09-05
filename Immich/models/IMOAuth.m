@@ -81,7 +81,7 @@ static BOOL IMOAuthEmail(id value) {
 	    !IMOAuthNonEmptyString(dictionary[@"accessToken"]) ||
 	    !IMOAuthBoolean(dictionary[@"isAdmin"]) ||
 	    !IMOAuthBoolean(dictionary[@"isOnboarded"]) ||
-	    !IMOAuthNonEmptyString(dictionary[@"name"]) ||
+	    ![dictionary[@"name"] isKindOfClass:[NSString class]] ||
 	    ![dictionary[@"profileImagePath"] isKindOfClass:[NSString class]] ||
 	    !IMOAuthBoolean(dictionary[@"shouldChangePassword"]) ||
 	    !IMOAuthEmail(dictionary[@"userEmail"]) ||
