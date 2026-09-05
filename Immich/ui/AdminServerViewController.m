@@ -2,6 +2,7 @@
 #import "IMServerApi.h"
 #import "IMApiClient.h"
 #import "IMServerStats.h"
+#import "ServerVersionHistoryViewController.h"
 #import "AdminSystemConfigViewController.h"
 #import "AdminUtilitiesViewController.h"
 #import "common.h"
@@ -23,6 +24,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 @property (nonatomic, strong, nullable) IMServerConfig *config;
 @property (nonatomic, strong, nullable) IMServerStorage *storage;
 @property (nonatomic, strong, nullable) IMServerVersionCheck *versionCheck;
+@property (nonatomic, copy, nullable) NSArray<IMServerVersionHistoryEntry *> *versionHistory;
 @property (nonatomic, strong, nullable) IMServerMediaTypes *mediaTypes;
 @property (nonatomic, strong, nullable) IMUserLicense *license;
 @property (nonatomic) BOOL licenseLoaded;
@@ -90,6 +92,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 	__block IMServerConfig *config = nil;
 	__block IMServerStorage *storage = nil;
 	__block IMServerVersionCheck *versionCheck = nil;
+	__block NSArray<IMServerVersionHistoryEntry *> *versionHistory = nil;
 	__block IMServerMediaTypes *mediaTypes = nil;
 	__block IMUserLicense *license = nil;
 	__block BOOL licenseLoaded = NO;
@@ -131,6 +134,11 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		dispatch_group_leave(group);
 	}];
 	dispatch_group_enter(group);
+	[IMServerApi serverVersionHistoryWithCompletion:^(NSArray<IMServerVersionHistoryEntry *> *value, NSError *error) {
+		if (error && !firstError) firstError = error; else versionHistory = value;
+		dispatch_group_leave(group);
+	}];
+	dispatch_group_enter(group);
 	[IMServerApi supportedMediaTypesWithCompletion:^(IMServerMediaTypes *value, NSError *error) {
 		if (error && !firstError) firstError = error; else mediaTypes = value;
 		dispatch_group_leave(group);
@@ -156,6 +164,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		if (config) self.config = config;
 		if (storage) self.storage = storage;
 		if (versionCheck) self.versionCheck = versionCheck;
+		if (versionHistory) self.versionHistory = versionHistory;
 		if (mediaTypes) self.mediaTypes = mediaTypes;
 		if (licenseLoaded) {
 			self.licenseLoaded = YES;
@@ -163,7 +172,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		}
 		if (status) self.maintenanceStatus = status;
 		[self.tableView reloadData];
-		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck || self.mediaTypes) ? nil : _(@"Couldn't load server information. Tap to retry.");
+		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck || self.versionHistory || self.mediaTypes) ? nil : _(@"Couldn't load server information. Tap to retry.");
 		if (!self.stats && !self.about && firstError) [self showError:firstError];
 	});
 }
@@ -330,13 +339,13 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return (self.stats || self.about || self.features || self.config || self.versionCheck || self.maintenanceStatus || self.licenseLoaded) ? IMAdminServerSectionCount : 0;
+	return (self.stats || self.about || self.features || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes || self.maintenanceStatus || self.licenseLoaded) ? IMAdminServerSectionCount : 0;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == IMAdminServerSectionTotals) return 3;
 	if (section == IMAdminServerSectionUsers) return self.stats.usageByUser.count;
-	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck || self.mediaTypes ? 7 : 0;
+	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes ? 8 : 0;
 	if (section == IMAdminServerSectionFeatures) return self.features ? 16 : 0;
 	if (section == IMAdminServerSectionLicense) return 1;
 	if (section == IMAdminServerSectionMaintenance) return 1;
@@ -376,7 +385,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		return cell;
 	}
 	if (indexPath.section == IMAdminServerSectionInfo) {
-		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release"), _(@"Supported media")];
+		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release"), _(@"Supported media"), _(@"Version history")];
 		NSString *build = self.about.build.length ? self.about.build : (self.about.sourceRef.length ? self.about.sourceRef : _(@"Unknown"));
 		NSString *license = self.about ? (self.about.licensed ? _(@"Licensed") : _(@"Community")) : _(@"Unavailable");
 		NSString *domain = self.config.externalDomain.length ? self.config.externalDomain : _(@"Not configured");
@@ -394,12 +403,16 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 			                (unsigned long)self.mediaTypes.video.count,
 			                (unsigned long)self.mediaTypes.sidecar.count];
 		}
+		NSString *historySummary = self.versionHistory ? [NSString stringWithFormat:_(@"%lu recorded %@"),
+		                                                   (unsigned long)self.versionHistory.count,
+		                                                   self.versionHistory.count == 1 ? _(@"version") : _(@"versions")] : _(@"Unavailable");
 		NSArray *values = @[
 			self.about.version.length ? self.about.version : _(@"Unavailable"), build, license, domain, trash,
-			versionCheckSummary, mediaSummary
+			versionCheckSummary, mediaSummary, historySummary
 		];
 		cell.textLabel.text = titles[indexPath.row];
 		cell.detailTextLabel.text = values[indexPath.row];
+		if (indexPath.row == 7 && self.versionHistory) cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 		return cell;
 	}
 	if (indexPath.section == IMAdminServerSectionFeatures) {
@@ -433,6 +446,11 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 	if (indexPath.section == IMAdminServerSectionLicense) {
 		[self licenseActions];
+		return;
+	}
+	if (indexPath.section == IMAdminServerSectionInfo && indexPath.row == 7 && self.versionHistory) {
+		[self.navigationController pushViewController:[[ServerVersionHistoryViewController alloc] initWithHistory:self.versionHistory]
+		                                     animated:YES];
 		return;
 	}
 	if (indexPath.section == IMAdminServerSectionMaintenance) [self maintenanceActions];
