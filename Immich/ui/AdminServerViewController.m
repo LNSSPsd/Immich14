@@ -23,6 +23,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 @property (nonatomic, strong, nullable) IMServerConfig *config;
 @property (nonatomic, strong, nullable) IMServerStorage *storage;
 @property (nonatomic, strong, nullable) IMServerVersionCheck *versionCheck;
+@property (nonatomic, strong, nullable) IMServerMediaTypes *mediaTypes;
 @property (nonatomic, strong, nullable) IMUserLicense *license;
 @property (nonatomic) BOOL licenseLoaded;
 @property (nonatomic, copy, nullable) NSDictionary *maintenanceStatus;
@@ -89,6 +90,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 	__block IMServerConfig *config = nil;
 	__block IMServerStorage *storage = nil;
 	__block IMServerVersionCheck *versionCheck = nil;
+	__block IMServerMediaTypes *mediaTypes = nil;
 	__block IMUserLicense *license = nil;
 	__block BOOL licenseLoaded = NO;
 	__block NSDictionary *status = nil;
@@ -129,6 +131,11 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		dispatch_group_leave(group);
 	}];
 	dispatch_group_enter(group);
+	[IMServerApi supportedMediaTypesWithCompletion:^(IMServerMediaTypes *value, NSError *error) {
+		if (error && !firstError) firstError = error; else mediaTypes = value;
+		dispatch_group_leave(group);
+	}];
+	dispatch_group_enter(group);
 	[IMServerApi serverLicenseWithCompletion:^(IMUserLicense *value, NSError *error) {
 		if (error) {
 			if (!firstError) firstError = error;
@@ -149,13 +156,14 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		if (config) self.config = config;
 		if (storage) self.storage = storage;
 		if (versionCheck) self.versionCheck = versionCheck;
+		if (mediaTypes) self.mediaTypes = mediaTypes;
 		if (licenseLoaded) {
 			self.licenseLoaded = YES;
 			self.license = license;
 		}
 		if (status) self.maintenanceStatus = status;
 		[self.tableView reloadData];
-		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck) ? nil : _(@"Couldn't load server information. Tap to retry.");
+		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck || self.mediaTypes) ? nil : _(@"Couldn't load server information. Tap to retry.");
 		if (!self.stats && !self.about && firstError) [self showError:firstError];
 	});
 }
@@ -328,7 +336,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == IMAdminServerSectionTotals) return 3;
 	if (section == IMAdminServerSectionUsers) return self.stats.usageByUser.count;
-	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck ? 6 : 0;
+	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck || self.mediaTypes ? 7 : 0;
 	if (section == IMAdminServerSectionFeatures) return self.features ? 16 : 0;
 	if (section == IMAdminServerSectionLicense) return 1;
 	if (section == IMAdminServerSectionMaintenance) return 1;
@@ -368,7 +376,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		return cell;
 	}
 	if (indexPath.section == IMAdminServerSectionInfo) {
-		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release")];
+		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release"), _(@"Supported media")];
 		NSString *build = self.about.build.length ? self.about.build : (self.about.sourceRef.length ? self.about.sourceRef : _(@"Unknown"));
 		NSString *license = self.about ? (self.about.licensed ? _(@"Licensed") : _(@"Community")) : _(@"Unavailable");
 		NSString *domain = self.config.externalDomain.length ? self.config.externalDomain : _(@"Not configured");
@@ -379,9 +387,16 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 			NSString *checked = self.versionCheck.checkedAt.length ? self.versionCheck.checkedAt : _(@"Never checked");
 			versionCheckSummary = [NSString stringWithFormat:_(@"%@ · checked %@"), release, checked];
 		}
+		NSString *mediaSummary = _(@"Unavailable");
+		if (self.mediaTypes) {
+			mediaSummary = [NSString stringWithFormat:_(@"%lu image · %lu video · %lu sidecar"),
+			                (unsigned long)self.mediaTypes.image.count,
+			                (unsigned long)self.mediaTypes.video.count,
+			                (unsigned long)self.mediaTypes.sidecar.count];
+		}
 		NSArray *values = @[
 			self.about.version.length ? self.about.version : _(@"Unavailable"), build, license, domain, trash,
-			versionCheckSummary
+			versionCheckSummary, mediaSummary
 		];
 		cell.textLabel.text = titles[indexPath.row];
 		cell.detailTextLabel.text = values[indexPath.row];
