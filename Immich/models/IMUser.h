@@ -17,6 +17,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 
++ (nullable instancetype)userWithResponseDictionary:(NSDictionary *)dict;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -1,4 +1,5 @@
 #import "IMUser.h"
+#import "IMAdminUser.h"
 
 static id IMValueOrNil(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
@@ -18,6 +19,11 @@ static id IMValueOrNil(id value) {
 @end
 
 @implementation IMUser
+
++ (nullable instancetype)userWithResponseDictionary:(NSDictionary *)dict {
+	if (![IMAdminUser userWithResponseDictionary:dict]) return nil;
+	return [[self alloc] initWithDictionary:dict];
+}
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict {
 	self = [super init];

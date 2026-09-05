@@ -33,18 +33,18 @@ static IMUser *sCachedUser;
 	[[IMApiClient shared] GET:@"/users/me"
 	                     query:nil
 	                completion:^(id _Nullable json, NSError *_Nullable error) {
-		    if (error || ![json isKindOfClass:[NSDictionary class]]) {
-			    completion(nil, error ?: IMUserMalformedResponse());
-			    return;
-		    }
-		    IMUser *user = [[IMUser alloc] initWithDictionary:(NSDictionary *)json];
-		    if (!user) {
-			    completion(nil, IMUserMalformedResponse());
-			    return;
-		    }
-		    sCachedUser = user;
-		    completion(user, nil);
-	    }];
+			if (error || ![json isKindOfClass:[NSDictionary class]]) {
+				completion(nil, error ?: IMUserMalformedResponse());
+				return;
+			}
+			IMUser *user = [IMUser userWithResponseDictionary:(NSDictionary *)json];
+			if (!user) {
+				completion(nil, IMUserMalformedResponse());
+				return;
+			}
+			sCachedUser = user;
+			completion(user, nil);
+		}];
 }
 
 + (nullable IMUser *)cachedUser {
@@ -79,7 +79,7 @@ static IMUser *sCachedUser;
 + (void)updateCurrentUserWithFields:(NSDictionary<NSString *,id> *)fields completion:(void (^)(IMUser *, NSError *))completion {
 	[[IMApiClient shared] PUT:@"/users/me" body:fields completion:^(id json, NSError *error) {
 		if (error || ![json isKindOfClass:NSDictionary.class]) { completion(nil, error ?: IMUserMalformedResponse()); return; }
-		IMUser *user = [[IMUser alloc] initWithDictionary:json];
+		IMUser *user = [IMUser userWithResponseDictionary:json];
 		if (!user) { completion(nil, IMUserMalformedResponse()); return; }
 		sCachedUser = user;
 		completion(user, nil);

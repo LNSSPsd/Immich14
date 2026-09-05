@@ -1,6 +1,7 @@
 #import "IMAuthApi.h"
 #import "IMApiClient.h"
 #import "IMSession.h"
+#import "IMUser.h"
 #import "common.h"
 #import <math.h>
 
@@ -119,21 +120,21 @@ static BOOL IMAuthSignupBaseURLIsValid(NSURL *baseURL) {
 	[client GET:@"/users/me"
 	       query:nil
 	  completion:^(id _Nullable json, NSError *_Nullable error) {
-		    [client invalidate]; 
+			[client invalidate]; 
 			if (error || ![json isKindOfClass:[NSDictionary class]]) {
 				completion(NO, error ?: IMAuthMalformedResponse(_(@"The server returned an invalid API-key response.")));
 				return;
 			}
-			id userId = ((NSDictionary *)json)[@"id"];
-			if (![userId isKindOfClass:[NSString class]] || [userId length] == 0) {
+			IMUser *user = [IMUser userWithResponseDictionary:(NSDictionary *)json];
+			if (!user) {
 				completion(NO, IMAuthMalformedResponse(_(@"The server returned an invalid user response.")));
 				return;
 			}
 			[[IMSession shared] startWithBaseURL:baseURL
-		                                   apiKey:apiKey
-		                                   userId:userId];
-		    completion(YES, nil);
-	    }];
+		                                  apiKey:apiKey
+		                                  userId:user.userId];
+			completion(YES, nil);
+		}];
 }
 
 + (void)validateTokenWithCompletion:(void (^)(BOOL valid))completion {
@@ -147,13 +148,13 @@ static BOOL IMAuthSignupBaseURLIsValid(NSURL *baseURL) {
 		[[IMApiClient shared] GET:@"/users/me"
 		                     query:nil
 		                completion:^(id _Nullable json, NSError *_Nullable error) {
-			    if (!error && [json isKindOfClass:[NSDictionary class]]) {
-				    completion(YES, NO);
-				    return;
-			    }
-			    NSInteger status = [IMApiClient HTTPStatusForError:error];
-			    completion(NO, status == 401 || status == 403);
-		    }];
+				if (!error && [IMUser userWithResponseDictionary:json]) {
+					completion(YES, NO);
+					return;
+				}
+				NSInteger status = [IMApiClient HTTPStatusForError:error];
+				completion(NO, status == 401 || status == 403);
+			}];
 		return;
 	}
 	[[IMApiClient shared] POST:@"/auth/validateToken"
