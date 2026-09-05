@@ -1,11 +1,32 @@
 #import "IMDatabase.h"
 #import <sqlite3.h>
+#include <stdlib.h>
 
 NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChangeNotification";
 
 @interface IMDatabase ()
 @property (nonatomic) sqlite3 *db;
 @end
+
+static NSString *IMDatabaseSupportDirectory(void) {
+	const char *sharedPath = getenv("IM_BACKUP_SUPPORT_PATH");
+	NSString *support = (sharedPath && sharedPath[0] != '\0')
+	    ? [NSString stringWithUTF8String:sharedPath]
+	    : nil;
+	if (support.length == 0) {
+		support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+	                                             NSUserDomainMask,
+	                                             YES).firstObject;
+	}
+	if (support.length == 0) {
+		support = NSTemporaryDirectory();
+	}
+	[[NSFileManager defaultManager] createDirectoryAtPath:support
+	                          withIntermediateDirectories:YES
+	                                           attributes:nil
+	                                                error:nil];
+	return support;
+}
 
 @implementation IMDatabase
 
@@ -27,8 +48,7 @@ NSNotificationName const IMSyncStateDidChangeNotification = @"IMSyncStateDidChan
 }
 
 - (void)openDatabase {
-	NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
-	[[NSFileManager defaultManager] createDirectoryAtPath:support withIntermediateDirectories:YES attributes:nil error:nil];
+	NSString *support = IMDatabaseSupportDirectory();
 	NSString *path = [support stringByAppendingPathComponent:@"immich.sqlite"];
 
 	if (sqlite3_open(path.UTF8String, &_db) != SQLITE_OK) {
