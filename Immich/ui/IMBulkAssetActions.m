@@ -776,17 +776,21 @@ presentingController:(UIViewController *)presenter
 	                                    handler:^(UIAlertAction *action) {
 		NSString *key = [[alert.textFields.firstObject.text ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
 		if (key.length == 0 || [key rangeOfCharacterFromSet:[NSCharacterSet controlCharacterSet]].location != NSNotFound) {
-			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
-			                        message:_(@"Enter a metadata key without control characters.")
-			          presentingController:presenter];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+				                        message:_(@"Enter a metadata key without control characters.")
+				          presentingController:presenter];
+			});
 			if (completion) completion(NO);
 			return;
 		}
 		NSArray<NSString *> *assetIds = [self idsForAssets:assets];
 		if (assetIds.count == 0) {
-			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
-			                        message:_(@"Select at least one valid server asset.")
-			          presentingController:presenter];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+				                        message:_(@"Select at least one valid server asset.")
+				          presentingController:presenter];
+			});
 			if (completion) completion(NO);
 			return;
 		}
@@ -806,9 +810,11 @@ presentingController:(UIViewController *)presenter
 		NSError *parseError = nil;
 		id value = jsonData.length ? [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&parseError] : nil;
 		if (![value isKindOfClass:[NSDictionary class]] || ![NSJSONSerialization isValidJSONObject:value]) {
-			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
-			                        message:_(@"The value must be a valid JSON object.")
-			          presentingController:presenter];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+				                        message:_(@"The value must be a valid JSON object.")
+				          presentingController:presenter];
+			});
 			if (completion) completion(NO);
 			return;
 		}
