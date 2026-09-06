@@ -10,7 +10,7 @@
 #import "common.h"
 #import <Photos/Photos.h>
 
-@interface IMBulkTagPickerController : UITableViewController
+@interface IMBulkTagPickerController : UITableViewController <UIAdaptivePresentationControllerDelegate>
 @property (nonatomic, copy) NSArray<IMTag *> *tags;
 @property (nonatomic, copy) NSArray<NSString *> *assetIds;
 @property (nonatomic, copy, nullable) void (^resultCompletion)(BOOL success);
@@ -116,7 +116,6 @@
 			if (error) {
 				strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
 				[strongSelf showError:error];
-				[strongSelf deliverCompletion:NO];
 				return;
 			}
 			[strongSelf dismissViewControllerAnimated:YES completion:^{
@@ -149,6 +148,10 @@
 - (void)tableView:(UITableView *)tableView didDeselectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView cellForRowAtIndexPath:indexPath].accessoryType = UITableViewCellAccessoryNone;
 	self.navigationItem.rightBarButtonItem.enabled = tableView.indexPathsForSelectedRows.count > 0;
+}
+
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+	[self deliverCompletion:NO];
 }
 
 @end
@@ -669,7 +672,9 @@ presentingController:(UIViewController *)presenter
 			                                                                  completion:completion];
 			UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
 			navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
-			[strongPresenter presentViewController:navigationController animated:YES completion:nil];
+			[strongPresenter presentViewController:navigationController animated:YES completion:^{
+				navigationController.presentationController.delegate = picker;
+			}];
 		});
 	}];
 }
