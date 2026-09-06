@@ -1,10 +1,11 @@
 #import "IMPhotoLibrary.h"
+#import "common.h"
 #import <CommonCrypto/CommonDigest.h>
 
 static NSError *IMPhotoLibraryRequestCancelledError(void) {
 	return [NSError errorWithDomain:NSURLErrorDomain
 	                            code:NSURLErrorCancelled
-	                        userInfo:@{ NSLocalizedDescriptionKey: @"Photo library request cancelled" }];
+	                        userInfo:@{ NSLocalizedDescriptionKey: _(@"Photo library request cancelled") }];
 }
 
 @interface IMPhotoLibrary ()
@@ -183,7 +184,7 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 		completion(nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
 		           [NSError errorWithDomain:@"IMPhotoLibrary"
 	                               code:4
-	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	                           userInfo:@{ NSLocalizedDescriptionKey: _(@"Unable to start PhotoKit resource request") }]);
 	}
 }
 
@@ -194,8 +195,8 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 	NSArray<PHAssetResource *> *resources = [self contentResourcesForAsset:asset];
 	if (resources.count == 0) {
 		completion(nil, nil, [NSError errorWithDomain:@"IMPhotoLibrary"
-		                                          code:1
-		                                      userInfo:@{ NSLocalizedDescriptionKey: @"Asset has no resource" }]);
+	                                          code:1
+	                                      userInfo:@{ NSLocalizedDescriptionKey: _(@"Asset has no resource") }]);
 		return;
 	}
 
@@ -222,8 +223,8 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 	dispatch_group_notify(group, dispatch_get_main_queue(), ^{
 		if (checksums.count == 0) {
 			completion(nil, nil, [NSError errorWithDomain:@"IMPhotoLibrary"
-			                                          code:2
-			                                      userInfo:@{ NSLocalizedDescriptionKey: @"All resource checksums failed" }]);
+		                                          code:2
+	                                      userInfo:@{ NSLocalizedDescriptionKey: _(@"All resource checksums failed") }]);
 			return;
 		}
 		completion(checksums, filename, nil);
@@ -293,7 +294,7 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 		completion(nil, nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
 		           [NSError errorWithDomain:@"IMPhotoLibrary"
 	                               code:5
-	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	                           userInfo:@{ NSLocalizedDescriptionKey: _(@"Unable to start PhotoKit resource request") }]);
 	}
 }
 
@@ -304,8 +305,8 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 	PHAssetResource *resource = [self uploadResourceForAsset:asset];
 	if (!resource) {
 		completion(nil, nil, [NSError errorWithDomain:@"IMPhotoLibrary"
-		                                          code:3
-		                                      userInfo:@{ NSLocalizedDescriptionKey: @"Asset has no resource" }]);
+	                                          code:3
+                                      userInfo:@{ NSLocalizedDescriptionKey: _(@"Asset has no resource") }]);
 		return;
 	}
 
@@ -334,7 +335,7 @@ static NSError *IMPhotoLibraryRequestCancelledError(void) {
 		completion(nil, nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
 		           [NSError errorWithDomain:@"IMPhotoLibrary"
 	                               code:6
-	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	                           userInfo:@{ NSLocalizedDescriptionKey: _(@"Unable to start PhotoKit resource request") }]);
 	}
 }
 

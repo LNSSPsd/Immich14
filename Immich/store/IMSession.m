@@ -31,6 +31,19 @@ static void IMClearAccountMediaCaches(void) {
 	}
 }
 
+static void IMClearAccountScopedState(void) {
+	[IMLockedPINStore deleteAllRememberedPINs];
+	[[IMDatabase shared] clearAllData];
+	[[IMBackupQueue shared] reset];
+	[[IMThumbCache shared] clearWithCompletion:^{}];
+	IMClearAccountMediaCaches();
+	[IMUserApi clearCachedUser];
+	[IMUserPreferencesApi clearCachedPreferences];
+	[IMServerApi clearCached];
+	[IMSystemConfigApi clearCachedConfig];
+	IMPrefs.shared.backupEnabled = NO;
+}
+
 @interface IMSession ()
 @property (nonatomic, copy, nullable) NSURL *baseURL;
 @property (nonatomic, copy, nullable) NSString *accessToken;
@@ -103,6 +116,13 @@ static void IMClearAccountMediaCaches(void) {
                   userId:(nullable NSString *)userId
                     kind:(IMSessionAuthKind)kind
    passwordChangeRequired:(BOOL)passwordChangeRequired {
+	BOOL accountChanged = self.isLoggedIn &&
+	    (![self.baseURL.absoluteString isEqualToString:baseURL.absoluteString] ||
+	     !((self.userId == nil && userId == nil) || [self.userId isEqualToString:userId]) ||
+	     self.authKind != kind);
+	if (accountChanged) {
+		IMClearAccountScopedState();
+	}
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults setObject:baseURL.absoluteString forKey:kDefaultsBaseURL];
 	if (userId) {
@@ -161,7 +181,6 @@ static void IMClearAccountMediaCaches(void) {
 }
 
 - (void)logout {
-	[IMLockedPINStore deleteAllRememberedPINs];
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults removeObjectForKey:kDefaultsBaseURL];
 	[defaults removeObjectForKey:kDefaultsUserId];
@@ -175,15 +194,7 @@ static void IMClearAccountMediaCaches(void) {
 	self.authKind = IMSessionAuthKindBearer;
 	self.passwordChangeRequired = NO;
 
-	[[IMDatabase shared] clearAllData];
-	[[IMBackupQueue shared] reset];
-	[[IMThumbCache shared] clearWithCompletion:^{}];
-	IMClearAccountMediaCaches();
-	[IMUserApi clearCachedUser];
-	[IMUserPreferencesApi clearCachedPreferences];
-	[IMServerApi clearCached];
-	[IMSystemConfigApi clearCachedConfig];
-	IMPrefs.shared.backupEnabled = NO;
+	IMClearAccountScopedState();
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];
 }
