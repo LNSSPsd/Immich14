@@ -195,6 +195,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.progressBlock = progress;
 	self.completionBlock = completion;
 	self.ignoreRetryBackoff = ignoreRetryBackoff;
+	[[IMPhotoLibrary shared] prepareForRequests];
 	if (IMBackupDaemonIsDaemonProcess()) {
 		[IMPrefs.shared reloadFromPersistence];
 		[IMSession.shared reloadFromPersistence];
@@ -284,6 +285,7 @@ static NSError *IMSyncSessionChangedError(void) {
 		return;
 	}
 	self.cancelled = YES;
+	[[IMPhotoLibrary shared] cancelOutstandingRequests];
 	NSObject *runToken = self.runToken;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (runToken == self.runToken && self.running) {
@@ -350,6 +352,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.uploadsEnabledForRun = NO;
 	self.runToken = nil;
 	self.assetFetchResult = nil;
+	[[IMPhotoLibrary shared] cancelOutstandingRequests];
 	if (completion) {
 		completion(error);
 	}

@@ -15,6 +15,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (PHFetchResult<PHAsset *> *)fetchAllAssets;
 
+- (void)prepareForRequests;
+
+- (void)cancelOutstandingRequests;
+
 - (void)checksumsForAsset:(PHAsset *)asset
                 completion:(void (^)(NSArray<NSString *> *_Nullable checksums,
                                       NSString *_Nullable filename,

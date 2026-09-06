@@ -1,6 +1,21 @@
 #import "IMPhotoLibrary.h"
 #import <CommonCrypto/CommonDigest.h>
 
+static NSError *IMPhotoLibraryRequestCancelledError(void) {
+	return [NSError errorWithDomain:NSURLErrorDomain
+	                            code:NSURLErrorCancelled
+	                        userInfo:@{ NSLocalizedDescriptionKey: @"Photo library request cancelled" }];
+}
+
+@interface IMPhotoLibrary ()
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *activeDataRequestIDs;
+@property (nonatomic) BOOL requestsCancelled;
+- (PHAssetResourceDataRequestID)trackedRequestDataForAssetResource:(PHAssetResource *)resource
+	                                                          options:(PHAssetResourceRequestOptions *)options
+	                                              dataReceivedHandler:(void (^)(NSData *data))dataReceivedHandler
+	                                                completionHandler:(void (^)(NSError *_Nullable error))completionHandler;
+@end
+
 @implementation IMPhotoLibrary
 
 + (instancetype)shared {
@@ -10,6 +25,67 @@
 		shared = [[IMPhotoLibrary alloc] init];
 	});
 	return shared;
+}
+
+- (instancetype)init {
+	self = [super init];
+	if (self) {
+		_activeDataRequestIDs = [NSMutableSet set];
+	}
+	return self;
+}
+
+- (void)prepareForRequests {
+	@synchronized (self) {
+		self.requestsCancelled = NO;
+	}
+}
+
+- (void)cancelOutstandingRequests {
+	NSArray<NSNumber *> *requestIDs;
+	@synchronized (self) {
+		self.requestsCancelled = YES;
+		requestIDs = self.activeDataRequestIDs.allObjects;
+		[self.activeDataRequestIDs removeAllObjects];
+	}
+	PHAssetResourceManager *manager = [PHAssetResourceManager defaultManager];
+	for (NSNumber *value in requestIDs) {
+		[manager cancelDataRequest:(PHAssetResourceDataRequestID)value.intValue];
+	}
+}
+
+- (PHAssetResourceDataRequestID)trackedRequestDataForAssetResource:(PHAssetResource *)resource
+	                                                          options:(PHAssetResourceRequestOptions *)options
+	                                              dataReceivedHandler:(void (^)(NSData *data))dataReceivedHandler
+	                                                completionHandler:(void (^)(NSError *_Nullable error))completionHandler {
+	if (!resource || !dataReceivedHandler || !completionHandler) {
+		return PHInvalidAssetResourceDataRequestID;
+	}
+	PHAssetResourceManager *manager = [PHAssetResourceManager defaultManager];
+	__block PHAssetResourceDataRequestID requestID = PHInvalidAssetResourceDataRequestID;
+	__block BOOL completedBeforeRegistration = NO;
+	@synchronized (self) {
+		if (self.requestsCancelled) {
+			return PHInvalidAssetResourceDataRequestID;
+		}
+		requestID = [manager requestDataForAssetResource:resource
+		                                       options:options
+		                           dataReceivedHandler:dataReceivedHandler
+		                             completionHandler:^(NSError *_Nullable error) {
+			@synchronized (self) {
+				if (requestID == PHInvalidAssetResourceDataRequestID) {
+					completedBeforeRegistration = YES;
+				} else {
+					[self.activeDataRequestIDs removeObject:@(requestID)];
+				}
+			}
+			completionHandler(error);
+		}];
+		if (requestID != PHInvalidAssetResourceDataRequestID && !completedBeforeRegistration) {
+			[self.activeDataRequestIDs addObject:@(requestID)];
+		}
+	}
+	return requestID;
 }
 
 - (void)requestAuthorizationWithCompletion:(void (^)(BOOL granted))completion {
@@ -81,25 +157,34 @@
 	PHAssetResourceRequestOptions *options = [[PHAssetResourceRequestOptions alloc] init];
 	options.networkAccessAllowed = YES; 
 
-	[[PHAssetResourceManager defaultManager]
-	    requestDataForAssetResource:resource
-	                         options:options
-	            dataReceivedHandler:^(NSData *_Nonnull data) {
-		    CC_SHA1_Update(&ctx, data.bytes, (CC_LONG)data.length);
-	    }
-	               completionHandler:^(NSError *_Nullable error) {
-		    if (error) {
-			    completion(nil, error);
-			    return;
-		    }
-		    unsigned char digest[CC_SHA1_DIGEST_LENGTH];
-		    CC_SHA1_Final(digest, &ctx);
-		    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA1_DIGEST_LENGTH * 2];
-		    for (int i = 0; i < CC_SHA1_DIGEST_LENGTH; i++) {
-			    [hex appendFormat:@"%02x", digest[i]];
-		    }
-		    completion(hex, nil);
-	    }];
+	PHAssetResourceDataRequestID requestID = [self trackedRequestDataForAssetResource:resource
+	                                                                            options:options
+	                                                                dataReceivedHandler:^(NSData *_Nonnull data) {
+				CC_SHA1_Update(&ctx, data.bytes, (CC_LONG)data.length);
+			}
+		                                                                  completionHandler:^(NSError *_Nullable error) {
+				if (error) {
+					completion(nil, error);
+					return;
+				}
+				unsigned char digest[CC_SHA1_DIGEST_LENGTH];
+				CC_SHA1_Final(digest, &ctx);
+				NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA1_DIGEST_LENGTH * 2];
+				for (int i = 0; i < CC_SHA1_DIGEST_LENGTH; i++) {
+					[hex appendFormat:@"%02x", digest[i]];
+				}
+				completion(hex, nil);
+			}];
+	if (requestID == PHInvalidAssetResourceDataRequestID) {
+		BOOL cancelled;
+		@synchronized (self) {
+			cancelled = self.requestsCancelled;
+		}
+		completion(nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
+		           [NSError errorWithDomain:@"IMPhotoLibrary"
+	                               code:4
+	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	}
 }
 
 - (void)checksumsForAsset:(PHAsset *)asset
@@ -188,19 +273,28 @@
 	options.networkAccessAllowed = YES;
 	NSString *filename = resource.originalFilename;
 
-	[[PHAssetResourceManager defaultManager]
-	    requestDataForAssetResource:resource
-	                         options:options
-	            dataReceivedHandler:^(NSData *_Nonnull data) {
-		    [buffer appendData:data];
-	    }
-	               completionHandler:^(NSError *_Nullable error) {
-		    if (error) {
-			    completion(nil, nil, error);
-			    return;
-		    }
-		    completion(buffer, filename, nil);
-	    }];
+	PHAssetResourceDataRequestID requestID = [self trackedRequestDataForAssetResource:resource
+	                                                                            options:options
+	                                                                dataReceivedHandler:^(NSData *_Nonnull data) {
+				[buffer appendData:data];
+			}
+		                                                                  completionHandler:^(NSError *_Nullable error) {
+				if (error) {
+					completion(nil, nil, error);
+					return;
+				}
+				completion(buffer, filename, nil);
+			}];
+	if (requestID == PHInvalidAssetResourceDataRequestID) {
+		BOOL cancelled;
+		@synchronized (self) {
+			cancelled = self.requestsCancelled;
+		}
+		completion(nil, nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
+		           [NSError errorWithDomain:@"IMPhotoLibrary"
+	                               code:5
+	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	}
 }
 
 - (void)originalDataForAsset:(PHAsset *)asset
@@ -220,19 +314,28 @@
 	options.networkAccessAllowed = YES;
 	NSString *filename = resource.originalFilename;
 
-	[[PHAssetResourceManager defaultManager]
-	    requestDataForAssetResource:resource
-	                         options:options
-	            dataReceivedHandler:^(NSData *_Nonnull data) {
-		    [buffer appendData:data];
-	    }
-	               completionHandler:^(NSError *_Nullable error) {
-		    if (error) {
-			    completion(nil, nil, error);
-			    return;
-		    }
-		    completion(buffer, filename, nil);
-	    }];
+	PHAssetResourceDataRequestID requestID = [self trackedRequestDataForAssetResource:resource
+	                                                                            options:options
+	                                                                dataReceivedHandler:^(NSData *_Nonnull data) {
+				[buffer appendData:data];
+			}
+		                                                                  completionHandler:^(NSError *_Nullable error) {
+				if (error) {
+					completion(nil, nil, error);
+					return;
+				}
+				completion(buffer, filename, nil);
+			}];
+	if (requestID == PHInvalidAssetResourceDataRequestID) {
+		BOOL cancelled;
+		@synchronized (self) {
+			cancelled = self.requestsCancelled;
+		}
+		completion(nil, nil, cancelled ? IMPhotoLibraryRequestCancelledError() :
+		           [NSError errorWithDomain:@"IMPhotoLibrary"
+	                               code:6
+	                           userInfo:@{ NSLocalizedDescriptionKey: @"Unable to start PhotoKit resource request" }]);
+	}
 }
 
 @end
