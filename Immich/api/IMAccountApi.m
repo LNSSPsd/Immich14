@@ -112,10 +112,18 @@ static NSString *IMAccountPathComponent(NSString *value) {
 		return;
 	}
 	NSString *path = [NSString stringWithFormat:@"/sessions/%@", IMAccountPathComponent(sessionId)];
-	[[IMApiClient shared] PUT:path body:@{ @"isPendingSyncReset": @(pendingSyncReset) } completion:^(id json, NSError *error) {
+	[[IMApiClient shared] PATCH:path body:@{ @"isPendingSyncReset": @(pendingSyncReset) } completion:^(id json, NSError *error) {
 		if (error) { completion(nil, error); return; }
 		IMSessionInfo *session = [IMSessionInfo sessionWithResponseDictionary:json];
 		completion(session, session ? nil : [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid session response.")}]);
+	}];
+}
+
++ (void)requestSyncResetForSessionId:(NSString *)sessionId
+                          completion:(void (^)(BOOL, NSError *))completion {
+	if (!completion) return;
+	[self updateSessionId:sessionId pendingSyncReset:YES completion:^(IMSessionInfo *session, NSError *error) {
+		completion(session != nil && error == nil, error);
 	}];
 }
 

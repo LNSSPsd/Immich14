@@ -203,7 +203,7 @@ typedef NS_ENUM(NSInteger, IMSecuritySection) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if (section == IMSecuritySectionKeys) return _(@"API-key secrets are displayed once when created. Store them securely.");
-	if (section == IMSecuritySectionSessions) return _(@"Revoking a session signs that device out. The current device cannot be revoked here.");
+	if (section == IMSecuritySectionSessions) return _(@"Reset device sync asks an authorized device to refresh its library. Revoking a session signs that device out; the current device cannot be revoked here.");
 	return nil;
 }
 
@@ -237,7 +237,10 @@ typedef NS_ENUM(NSInteger, IMSecuritySection) {
 		IMSessionInfo *session = self.sessions[indexPath.row];
 		cell.textLabel.text = session.deviceType.length ? session.deviceType : _(@"Unknown device");
 		NSString *os = session.deviceOS.length ? session.deviceOS : _(@"Unknown OS");
-		cell.detailTextLabel.text = session.isCurrent ? [NSString stringWithFormat:_(@"%@ · %@"), os, _(@"Current device")] : os;
+		NSMutableArray<NSString *> *details = [NSMutableArray arrayWithObject:os];
+		if (session.isCurrent) [details addObject:_(@"Current device")];
+		if (session.pendingSyncReset) [details addObject:_(@"Sync reset requested")];
+		cell.detailTextLabel.text = [details componentsJoinedByString:@" · "];
 		cell.accessoryType = session.isCurrent ? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
 	} else {
 		if (self.apiKeys.count == 0) {
@@ -286,6 +289,13 @@ typedef NS_ENUM(NSInteger, IMSecuritySection) {
 			else [strongSelf showMessage:_(@"The device session was locked.")];
 		}];
 	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Reset device sync") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AccountSecurityViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		[strongSelf dismissViewControllerAnimated:YES completion:^{
+			[strongSelf confirmSyncResetForSession:session];
+		}];
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Revoke Session") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
 		AccountSecurityViewController *strongSelf = weakSelf;
 		if (!strongSelf) return;
@@ -297,6 +307,28 @@ typedef NS_ENUM(NSInteger, IMSecuritySection) {
 	sheet.popoverPresentationController.sourceView = sourceCell ?: self.view;
 	sheet.popoverPresentationController.sourceRect = sourceCell ? sourceCell.bounds : self.view.bounds;
 	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)confirmSyncResetForSession:(IMSessionInfo *)session {
+	if (!session.sessionId.length) return;
+	NSString *device = session.deviceType.length ? session.deviceType : _(@"This device");
+	NSString *message = [NSString stringWithFormat:_(@"%@ will discard its incremental sync cursor and refresh its library the next time it syncs."), device];
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Reset device sync?") message:message preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Reset sync") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+		[IMAccountApi requestSyncResetForSessionId:session.sessionId completion:^(BOOL success, NSError *error) {
+			AccountSecurityViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			if (!success || error) {
+				[strongSelf showError:error ?: [NSError errorWithDomain:@"IMAccountApi" code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server could not request a device sync reset.")}]];
+				return;
+			}
+			[strongSelf showMessage:_(@"A full sync was requested. The device will refresh its library the next time it connects.")];
+			[strongSelf reload];
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)revokeSession:(IMSessionInfo *)session {

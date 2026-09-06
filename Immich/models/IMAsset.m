@@ -16,6 +16,7 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 
 @interface IMAsset ()
 @property (nonatomic, copy) NSString *assetId;
+@property (nonatomic, copy, nullable) NSString *ownerId;
 @property (nonatomic, copy) NSString *fileCreatedAt;
 @property (nonatomic, getter=isFavorite) BOOL favorite;
 @property (nonatomic, getter=isImage) BOOL image;
@@ -39,6 +40,7 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 		return @[];
 	}
 	NSArray *fileCreatedAt = IMArrayOrEmpty(json[@"fileCreatedAt"]);
+	NSArray *ownerIds = IMArrayOrEmpty(json[@"ownerId"]);
 	NSArray *isFavorite = IMArrayOrEmpty(json[@"isFavorite"]);
 	NSArray *isImage = IMArrayOrEmpty(json[@"isImage"]);
 	NSArray *duration = IMArrayOrEmpty(json[@"duration"]);
@@ -57,6 +59,8 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 			continue;
 		}
 		asset.assetId = assetIdValue;
+		id ownerIdValue = IMValueOrNil(IMArrayValue(ownerIds, i));
+		asset.ownerId = [ownerIdValue isKindOfClass:[NSString class]] && [ownerIdValue length] > 0 ? ownerIdValue : nil;
 		id createdValue = IMArrayValue(fileCreatedAt, i);
 		asset.fileCreatedAt = [createdValue isKindOfClass:[NSString class]] ? createdValue : @"";
 		id favoriteValue = IMValueOrNil(IMArrayValue(isFavorite, i));
@@ -111,6 +115,8 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 
 	IMAsset *asset = [[IMAsset alloc] init];
 	asset.assetId = assetId;
+	id ownerId = IMValueOrNil(dict[@"ownerId"]);
+	asset.ownerId = [ownerId isKindOfClass:[NSString class]] && [(NSString *)ownerId length] > 0 ? ownerId : nil;
 	id fileCreatedAt = IMValueOrNil(dict[@"fileCreatedAt"]);
 	asset.fileCreatedAt = [fileCreatedAt isKindOfClass:[NSString class]] ? fileCreatedAt : @"";
 	id favorite = IMValueOrNil(dict[@"isFavorite"]);

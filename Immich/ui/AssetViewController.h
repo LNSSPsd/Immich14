@@ -10,6 +10,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
                        startIndex:(NSInteger)startIndex
                          readOnly:(BOOL)readOnly;
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                         readOnly:(BOOL)readOnly
+                    ownerAware:(BOOL)ownerAware;
 
 @property (nonatomic, weak, nullable) id<IMZoomTransitionSource> zoomSource;
 

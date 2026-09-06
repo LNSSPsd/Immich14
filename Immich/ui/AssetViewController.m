@@ -6,6 +6,7 @@
 #import "IMSharedLinkApi.h"
 #import "SharedLinkEditorViewController.h"
 #import "IMThumbCache.h"
+#import "IMSession.h"
 #import "common.h"
 #import <AVFoundation/AVFoundation.h>
 #import <ImageIO/ImageIO.h>
@@ -1220,6 +1221,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic, strong) NSArray<IMAsset *> *assets;
 @property (nonatomic) NSInteger currentIndex;
 @property (nonatomic) BOOL readOnly;
+@property (nonatomic) BOOL ownerAware;
 @property (nonatomic, strong) UIPageViewController *pageViewController;
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
@@ -1234,6 +1236,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic) BOOL slideshowPlaying;
 @property (nonatomic) BOOL slideshowTransitioning;
 @property (nonatomic, strong, nullable) NSTimer *slideshowTimer;
+- (BOOL)currentAssetAllowsMutations;
 - (void)shareOriginalFileForAsset:(IMAsset *)asset;
 - (void)createSharedLinkForAsset:(IMAsset *)asset;
 - (void)editCurrentAsset;
@@ -1251,10 +1254,18 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
                        startIndex:(NSInteger)startIndex
                          readOnly:(BOOL)readOnly {
+	return [self viewerWithAssets:assets startIndex:startIndex readOnly:readOnly ownerAware:NO];
+}
+
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                         readOnly:(BOOL)readOnly
+                        ownerAware:(BOOL)ownerAware {
 	AssetViewController *vc = [[AssetViewController alloc] init];
 	vc.assets = assets;
 	vc.currentIndex = startIndex;
 	vc.readOnly = readOnly;
+	vc.ownerAware = ownerAware;
 	vc.favoriteOverrides = [NSMutableDictionary dictionary];
 	vc.modalPresentationStyle = UIModalPresentationFullScreen;
 	vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
@@ -1266,6 +1277,18 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 
 - (IMAsset *)currentAsset {
 	return self.assets[self.currentIndex];
+}
+
+- (BOOL)currentAssetAllowsMutations {
+	if (self.readOnly || self.assets.count == 0 || self.currentIndex < 0 || self.currentIndex >= (NSInteger)self.assets.count) {
+		return NO;
+	}
+	if (!self.ownerAware) {
+		return YES;
+	}
+	NSString *ownerId = self.currentAsset.ownerId;
+	NSString *userId = IMSession.shared.userId;
+	return ownerId.length > 0 && userId.length > 0 && [ownerId isEqualToString:userId];
 }
 
 - (nullable UIImageView *)currentPageImageView {
@@ -1370,18 +1393,18 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	[self.bottomBar.contentView addSubview:self.shareButton];
 
 	self.favoriteButton = [self chromeButtonWithSymbol:@"heart"];
-	self.favoriteButton.hidden = self.readOnly;
+	self.favoriteButton.hidden = ![self currentAssetAllowsMutations];
 	[self.favoriteButton addTarget:self action:@selector(favoriteTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.favoriteButton];
 
 	self.editButton = [self chromeButtonWithSymbol:@"slider.horizontal.3"];
-	self.editButton.hidden = self.readOnly;
+	self.editButton.hidden = ![self currentAssetAllowsMutations];
 	self.editButton.accessibilityLabel = _(@"Edit photo");
 	[self.editButton addTarget:self action:@selector(editCurrentAsset) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.editButton];
 
 	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
-	self.addToAlbumButton.hidden = self.readOnly;
+	self.addToAlbumButton.hidden = ![self currentAssetAllowsMutations];
 	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.addToAlbumButton];
 
@@ -1524,7 +1547,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)addToAlbumTapped {
-	if (self.readOnly || self.assets.count == 0) return;
+	if (![self currentAssetAllowsMutations]) return;
 	IMAsset *asset = self.assets[self.currentIndex];
 	AddToAlbumViewController *picker = [AddToAlbumViewController pickerForAssetId:asset.assetId];
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:picker];
@@ -1538,6 +1561,9 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)updateFavoriteButton {
+	BOOL allowsMutations = [self currentAssetAllowsMutations];
+	self.favoriteButton.hidden = !allowsMutations;
+	self.favoriteButton.enabled = allowsMutations;
 	BOOL favorite = [self isCurrentAssetFavorite];
 	if (@available(iOS 13.0, *)) {
 		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
@@ -1552,13 +1578,13 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
-	BOOL available = !self.readOnly && asset.isImage && asset.livePhotoVideoId.length == 0;
+	BOOL available = [self currentAssetAllowsMutations] && asset.isImage && asset.livePhotoVideoId.length == 0;
 	self.editButton.hidden = !available;
 	self.editButton.enabled = available;
 }
 
 - (void)editCurrentAsset {
-	if (self.readOnly || self.assets.count == 0) {
+	if (![self currentAssetAllowsMutations]) {
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
@@ -1586,7 +1612,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)favoriteTapped {
-	if (self.readOnly || self.assets.count == 0) return;
+	if (![self currentAssetAllowsMutations]) return;
 	IMAsset *asset = self.assets[self.currentIndex];
 	NSString *assetId = asset.assetId;
 	BOOL newValue = ![self isCurrentAssetFavorite];

@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface IMAsset : NSObject
 
 @property (nonatomic, copy, readonly) NSString *assetId;
+@property (nonatomic, copy, readonly, nullable) NSString *ownerId;
 @property (nonatomic, copy, readonly) NSString *fileCreatedAt; 
 @property (nonatomic, readonly, getter=isFavorite) BOOL favorite;
 @property (nonatomic, readonly, getter=isImage) BOOL image; 

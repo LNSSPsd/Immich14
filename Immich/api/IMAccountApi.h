@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
        pendingSyncReset:(BOOL)pendingSyncReset
               completion:(void (^)(IMSessionInfo *_Nullable session,
                                     NSError *_Nullable error))completion;
++ (void)requestSyncResetForSessionId:(NSString *)sessionId
+                          completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 + (void)deleteSessionId:(NSString *)sessionId completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 + (void)lockSessionId:(NSString *)sessionId completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 + (void)deleteAllOtherSessionsWithCompletion:(void (^)(BOOL success, NSError *_Nullable error))completion;

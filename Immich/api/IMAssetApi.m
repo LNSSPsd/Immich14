@@ -201,7 +201,7 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 		return NO;
 	}
 	NSArray<NSString *> *columnKeys = @[
-		@"fileCreatedAt", @"isFavorite", @"isImage", @"duration", @"ratio",
+		@"fileCreatedAt", @"ownerId", @"isFavorite", @"isImage", @"duration", @"ratio",
 		@"city", @"country", @"livePhotoVideoId", @"stack"
 	];
 	for (NSString *key in columnKeys) {
@@ -219,6 +219,7 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 		}
 	}
 	NSArray *fileCreatedAt = json[@"fileCreatedAt"];
+	NSArray *ownerIds = json[@"ownerId"];
 	NSArray *favorite = json[@"isFavorite"];
 	NSArray *image = json[@"isImage"];
 	NSArray *duration = json[@"duration"];
@@ -230,6 +231,10 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	for (NSUInteger index = 0; index < ids.count; index++) {
 		id created = index < fileCreatedAt.count ? fileCreatedAt[index] : nil;
 		if (!IMAssetNullOrString(created)) {
+			return NO;
+		}
+		id ownerId = index < ownerIds.count ? ownerIds[index] : nil;
+		if (ownerIds != nil && !IMAssetUUIDv4IsValid(ownerId)) {
 			return NO;
 		}
 		id favoriteValue = index < favorite.count ? favorite[index] : nil;
