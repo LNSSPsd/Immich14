@@ -2,6 +2,8 @@
 #import "IMApiClient.h"
 #import "IMMaintenanceApi.h"
 #import "common.h"
+#include <math.h>
+#include <string.h>
 
 static NSError *IMServerMalformedResponse(NSString *message) {
 	return [NSError errorWithDomain:IMApiErrorDomain
@@ -32,6 +34,14 @@ static BOOL IMServerLicenseKeyIsValid(id value) {
 
 static BOOL IMServerNumber(id value) {
 	return [value isKindOfClass:[NSNumber class]];
+}
+
+static BOOL IMServerVersionInteger(id value) {
+	if (![value isKindOfClass:[NSNumber class]]) return NO;
+	const char *type = [(NSNumber *)value objCType];
+	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) return NO;
+	double number = [(NSNumber *)value doubleValue];
+	return isfinite(number) && floor(number) == number && number >= 0.0 && number <= 9007199254740991.0;
 }
 
 static BOOL IMServerStorageResponseIsValid(NSDictionary *dict) {
@@ -102,13 +112,18 @@ static IMServerStorage *sCachedServerStorage;
 		    }
 		    NSDictionary *dict = (NSDictionary *)json;
 		    id major = dict[@"major"], minor = dict[@"minor"], patch = dict[@"patch"];
-		    if (![major isKindOfClass:[NSNumber class]] || ![minor isKindOfClass:[NSNumber class]] ||
-		        ![patch isKindOfClass:[NSNumber class]]) {
+		    id prerelease = dict[@"prerelease"];
+		    if (!IMServerVersionInteger(major) || !IMServerVersionInteger(minor) ||
+		        !IMServerVersionInteger(patch) || prerelease == nil ||
+		        (prerelease != [NSNull null] && !IMServerVersionInteger(prerelease))) {
 			    completion(nil, IMServerMalformedResponse(_(@"The server returned an invalid version response.")));
 			    return;
 		    }
 		    NSString *version = [NSString stringWithFormat:@"v%ld.%ld.%ld", (long)[major integerValue], (long)[minor integerValue],
 		                                                    (long)[patch integerValue]];
+		    if (prerelease != [NSNull null]) {
+			    version = [version stringByAppendingFormat:@"-rc.%ld", (long)[prerelease integerValue]];
+		    }
 		    sCachedServerVersion = version;
 		    completion(version, nil);
 	    }];
