@@ -115,6 +115,11 @@
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Set Primary Photo") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
 		[self presentPrimaryPickerForStack:stack];
 	}]];
+	if (stack.assets.count > 2) {
+		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Remove Photo") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			[self presentRemovePickerForStack:stack];
+		}]];
+	}
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Delete Stack") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
 		[self deleteStack:stack];
 	}]];
@@ -136,6 +141,41 @@
 	[picker addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
 	if (picker.popoverPresentationController) { picker.popoverPresentationController.sourceView = self.view; picker.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 1, 1); }
 	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)presentRemovePickerForStack:(IMStack *)stack {
+	UIAlertController *picker = [UIAlertController alertControllerWithTitle:_(@"Remove Photo From Stack") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+	for (IMAsset *asset in stack.assets) {
+		if ([asset.assetId isEqualToString:stack.primaryAssetId]) continue;
+		NSString *title = asset.fileCreatedAt.length ? asset.fileCreatedAt : asset.assetId;
+		[picker addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+			[self confirmRemoveAsset:asset fromStack:stack];
+		}]];
+	}
+	[picker addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (picker.popoverPresentationController) {
+		picker.popoverPresentationController.sourceView = self.view;
+		picker.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 1, 1);
+	}
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)confirmRemoveAsset:(IMAsset *)asset fromStack:(IMStack *)stack {
+	NSString *title = asset.fileCreatedAt.length ? asset.fileCreatedAt : asset.assetId;
+	UIAlertController *confirm = [UIAlertController alertControllerWithTitle:_(@"Remove photo from stack?")
+	                                                                        message:title
+	                                                                 preferredStyle:UIAlertControllerStyleAlert];
+	[confirm addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[confirm addAction:[UIAlertAction actionWithTitle:_(@"Remove") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+		StacksViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		[IMStackApi removeAssetId:asset.assetId fromStack:stack.stackId completion:^(BOOL success, NSError *error) {
+			if (!success) [strongSelf showError:error title:_(@"Couldn't Remove Photo")];
+			else [strongSelf refresh];
+		}];
+	}]];
+	[self presentViewController:confirm animated:YES completion:nil];
 }
 
 - (void)deleteStack:(IMStack *)stack {
