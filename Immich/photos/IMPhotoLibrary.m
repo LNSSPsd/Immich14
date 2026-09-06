@@ -34,10 +34,14 @@
 	return (NSInteger)[PHAsset fetchAssetsWithOptions:options].count;
 }
 
-- (NSArray<PHAsset *> *)allAssets {
+- (PHFetchResult<PHAsset *> *)fetchAllAssets {
 	PHFetchOptions *options = [[PHFetchOptions alloc] init];
 	options.sortDescriptors = @[ [NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:YES] ];
-	PHFetchResult<PHAsset *> *result = [PHAsset fetchAssetsWithOptions:options];
+	return [PHAsset fetchAssetsWithOptions:options];
+}
+
+- (NSArray<PHAsset *> *)allAssets {
+	PHFetchResult<PHAsset *> *result = [self fetchAllAssets];
 	NSMutableArray<PHAsset *> *assets = [NSMutableArray arrayWithCapacity:result.count];
 	[result enumerateObjectsUsingBlock:^(PHAsset *asset, NSUInteger idx, BOOL *stop) {
 		[assets addObject:asset];

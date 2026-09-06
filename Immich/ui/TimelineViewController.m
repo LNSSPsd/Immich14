@@ -320,7 +320,7 @@ static const CGFloat kCellSpacing = 2;
 	NSDictionary<NSString *, NSNumber *> *states = [[IMDatabase shared] allDeviceAssetSyncStates];
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(self.localScanQueue, ^{
-		NSArray<PHAsset *> *assets = [[IMPhotoLibrary shared] allAssets]; 
+		PHFetchResult<PHAsset *> *assets = [[IMPhotoLibrary shared] fetchAllAssets]; 
 		NSMutableDictionary<NSString *, NSMutableArray<IMTimelineLocalItem *> *> *grouped = [NSMutableDictionary dictionary];
 		for (PHAsset *asset in assets) {
 			NSNumber *stateNum = states[asset.localIdentifier];

@@ -70,7 +70,7 @@ static NSError *IMSyncSessionChangedError(void) {
 @property (nonatomic, readwrite) NSInteger totalCount;
 @property (nonatomic, readwrite) NSInteger checkedCount;
 
-@property (nonatomic, strong, nullable) NSArray<PHAsset *> *assets;
+@property (nonatomic, strong, nullable) PHFetchResult<PHAsset *> *assetFetchResult;
 @property (nonatomic) NSUInteger nextIndex;
 @property (nonatomic, strong) NSMutableSet<NSString *> *pendingChangedBuckets;
 @property (nonatomic, strong) NSMutableArray<NSDictionary<NSString *, NSString *> *> *batchItems;
@@ -229,7 +229,7 @@ static NSError *IMSyncSessionChangedError(void) {
 			return;
 		}
 		dispatch_async(strongSelf.workQueue, ^{
-			NSArray<PHAsset *> *assets = [[IMPhotoLibrary shared] allAssets];
+			PHFetchResult<PHAsset *> *assetFetchResult = [[IMPhotoLibrary shared] fetchAllAssets];
 			if (runSessionFingerprint.length == 0 ||
 			    ![runSessionFingerprint isEqualToString:IMSyncSessionFingerprint()]) {
 				dispatch_async(dispatch_get_main_queue(), ^{
@@ -243,14 +243,14 @@ static NSError *IMSyncSessionChangedError(void) {
 			} else {
 				fullPhotoAuthorization = [PHPhotoLibrary authorizationStatus] == PHAuthorizationStatusAuthorized;
 			}
-			if (fullPhotoAuthorization && assets) {
-				NSMutableSet<NSString *> *currentAssetIDs = [NSMutableSet setWithCapacity:assets.count];
-				for (PHAsset *asset in assets) {
+			if (fullPhotoAuthorization && assetFetchResult) {
+				NSMutableSet<NSString *> *currentAssetIDs = [NSMutableSet setWithCapacity:assetFetchResult.count];
+				[assetFetchResult enumerateObjectsUsingBlock:^(PHAsset *asset, NSUInteger idx, BOOL *stop) {
 					NSString *localIdentifier = asset.localIdentifier;
 					if (localIdentifier.length > 0) {
 						[currentAssetIDs addObject:localIdentifier];
 					}
-				}
+				}];
 				[[IMBackupQueue shared] pruneDeviceAssetIdsNotInSet:currentAssetIDs];
 			}
 			dispatch_async(dispatch_get_main_queue(), ^{
@@ -261,8 +261,8 @@ static NSError *IMSyncSessionChangedError(void) {
 				if (![s2 ensureCurrentRunToken:runToken]) {
 					return;
 				}
-				s2.assets = assets;
-				s2.totalCount = (NSInteger)assets.count;
+				s2.assetFetchResult = assetFetchResult;
+				s2.totalCount = (NSInteger)assetFetchResult.count;
 				s2.nextIndex = 0;
 				s2.batchItems = [NSMutableArray array];
 				s2.batchAssetsById = [NSMutableDictionary dictionary];
@@ -349,6 +349,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.runSessionFingerprint = nil;
 	self.uploadsEnabledForRun = NO;
 	self.runToken = nil;
+	self.assetFetchResult = nil;
 	if (completion) {
 		completion(error);
 	}
@@ -394,7 +395,7 @@ static NSError *IMSyncSessionChangedError(void) {
 		return;
 	}
 
-	if (self.nextIndex >= self.assets.count) {
+	if (!self.assetFetchResult || self.nextIndex >= self.assetFetchResult.count) {
 		if (self.batchItems.count > 0) {
 			__weak typeof(self) weakSelf = self;
 			[self flushBatchThen:^{
@@ -406,7 +407,7 @@ static NSError *IMSyncSessionChangedError(void) {
 		return;
 	}
 
-	PHAsset *asset = self.assets[self.nextIndex];
+	PHAsset *asset = [self.assetFetchResult objectAtIndex:self.nextIndex];
 	self.nextIndex++;
 
 	NSString *deviceAssetId = asset.localIdentifier;

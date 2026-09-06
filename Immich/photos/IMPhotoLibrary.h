@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (NSArray<PHAsset *> *)allAssets;
 
+- (PHFetchResult<PHAsset *> *)fetchAllAssets;
+
 - (void)checksumsForAsset:(PHAsset *)asset
                 completion:(void (^)(NSArray<NSString *> *_Nullable checksums,
                                       NSString *_Nullable filename,
