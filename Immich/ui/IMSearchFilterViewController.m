@@ -1,5 +1,7 @@
 #import "IMSearchFilterViewController.h"
 #import "IMAlbumApi.h"
+#import "IMSearchApi.h"
+#import "IMTagApi.h"
 #import "common.h"
 
 @interface IMSearchAlbumPickerViewController : UITableViewController
@@ -79,6 +81,94 @@
 
 @end
 
+@interface IMSearchMultiSelectPickerViewController : UITableViewController
+@property (nonatomic, copy) NSString *pickerTitle;
+@property (nonatomic, copy) NSArray<NSString *> *itemIds;
+@property (nonatomic, copy) NSArray<NSString *> *itemTitles;
+@property (nonatomic, copy) NSArray<NSString *> *itemDetails;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selectedIds;
+@property (nonatomic, copy, nullable) void (^completion)(NSSet<NSString *> *selectedIds);
+- (instancetype)initWithTitle:(NSString *)title
+                         itemIds:(NSArray<NSString *> *)itemIds
+                       itemTitles:(NSArray<NSString *> *)itemTitles
+                      itemDetails:(NSArray<NSString *> *)itemDetails
+                       selectedIds:(NSSet<NSString *> *)selectedIds
+                       completion:(nullable void (^)(NSSet<NSString *> *selectedIds))completion;
+@end
+
+@implementation IMSearchMultiSelectPickerViewController
+
+- (instancetype)initWithTitle:(NSString *)title
+                         itemIds:(NSArray<NSString *> *)itemIds
+                       itemTitles:(NSArray<NSString *> *)itemTitles
+                      itemDetails:(NSArray<NSString *> *)itemDetails
+                       selectedIds:(NSSet<NSString *> *)selectedIds
+                       completion:(void (^)(NSSet<NSString *> *selectedIds))completion {
+	self = [super initWithStyle:UITableViewStyleInsetGrouped];
+	if (self) {
+		_pickerTitle = [title copy];
+		_itemIds = [itemIds copy];
+		_itemTitles = [itemTitles copy];
+		_itemDetails = [itemDetails copy];
+		_selectedIds = [selectedIds mutableCopy] ?: [NSMutableSet set];
+		_completion = [completion copy];
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = self.pickerTitle;
+	self.tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectZero];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+	                                                                                          target:self
+	                                                                                          action:@selector(cancelTapped)];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+	                                                                                           target:self
+	                                                                                           action:@selector(doneTapped)];
+	self.navigationItem.rightBarButtonItem.accessibilityLabel = [NSString stringWithFormat:_(@"Apply %@ filter"), self.pickerTitle.lowercaseString];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return MIN(self.itemIds.count, self.itemTitles.count);
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *const reuseIdentifier = @"SearchMultiSelectFilterCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseIdentifier];
+	if (!cell) {
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuseIdentifier];
+		cell.textLabel.adjustsFontForContentSizeCategory = YES;
+		cell.detailTextLabel.adjustsFontForContentSizeCategory = YES;
+	}
+	NSString *itemId = self.itemIds[indexPath.row];
+	cell.textLabel.text = self.itemTitles[indexPath.row];
+	cell.detailTextLabel.text = indexPath.row < self.itemDetails.count ? self.itemDetails[indexPath.row] : nil;
+	BOOL selected = [self.selectedIds containsObject:itemId];
+	cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	cell.accessibilityTraits = selected ? UIAccessibilityTraitButton | UIAccessibilityTraitSelected : UIAccessibilityTraitButton;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSString *itemId = self.itemIds[indexPath.row];
+	if ([self.selectedIds containsObject:itemId]) [self.selectedIds removeObject:itemId];
+	else if (itemId.length > 0) [self.selectedIds addObject:itemId];
+	[tableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)cancelTapped {
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)doneTapped {
+	if (self.completion) self.completion([self.selectedIds copy]);
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+@end
+
 @interface IMSearchFilterViewController ()
 @property (nonatomic, copy) IMSearchFilterApplyHandler applyHandler;
 @property (nonatomic, strong) UISwitch *afterSwitch;
@@ -96,6 +186,14 @@
 @property (nonatomic, strong) UIButton *albumButton;
 @property (nonatomic, copy) NSArray<IMAlbum *> *albums;
 @property (nonatomic, strong) NSMutableSet<NSString *> *selectedAlbumIds;
+@property (nonatomic, strong) UIButton *peopleButton;
+@property (nonatomic, copy) NSArray<IMPerson *> *people;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selectedPersonIds;
+@property (nonatomic, strong) UIButton *tagButton;
+@property (nonatomic, copy) NSArray<IMTag *> *tags;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selectedTagIds;
+@property (nonatomic) BOOL peopleLoadInFlight;
+@property (nonatomic) BOOL tagsLoadInFlight;
 @end
 
 static NSString *IMSearchFilterISODate(NSDate *date) {
@@ -113,6 +211,10 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 		_applyHandler = [handler copy];
 		_albums = [IMAlbumApi cachedAlbums];
 		_selectedAlbumIds = [NSMutableSet set];
+		_people = [IMSearchApi cachedPeople];
+		_selectedPersonIds = [NSMutableSet set];
+		_tags = @[];
+		_selectedTagIds = [NSMutableSet set];
 	}
 	return self;
 }
@@ -150,7 +252,7 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 		[stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
 	]];
 
-	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, visibility, rating, album membership, and display options.")];
+	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, visibility, rating, people, tags, album membership, and display options.")];
 	hint.numberOfLines = 0;
 	if (@available(iOS 13.0, *)) hint.textColor = UIColor.secondaryLabelColor;
 	[stack addArrangedSubview:hint];
@@ -215,6 +317,27 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	self.albumButton.accessibilityLabel = _(@"Album membership filter");
 	[self.albumButton addTarget:self action:@selector(albumButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 	[stack addArrangedSubview:self.albumButton];
+
+	[stack addArrangedSubview:[self labelWithText:_(@"People")]];
+	self.peopleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.peopleButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.peopleButton setTitle:_(@"Any person") forState:UIControlStateNormal];
+	self.peopleButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+	self.peopleButton.titleLabel.adjustsFontForContentSizeCategory = YES;
+	self.peopleButton.accessibilityLabel = _(@"People filter");
+	[self.peopleButton addTarget:self action:@selector(peopleButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+	[stack addArrangedSubview:self.peopleButton];
+
+	[stack addArrangedSubview:[self labelWithText:_(@"Tags")]];
+	self.tagButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.tagButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.tagButton setTitle:_(@"Any tag") forState:UIControlStateNormal];
+	self.tagButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+	self.tagButton.titleLabel.adjustsFontForContentSizeCategory = YES;
+	self.tagButton.accessibilityLabel = _(@"Tags filter");
+	[self.tagButton addTarget:self action:@selector(tagButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+	[stack addArrangedSubview:self.tagButton];
+
 	if (self.albums.count == 0) {
 		__weak typeof(self) weakSelf = self;
 		[IMAlbumApi allAlbumsWithCompletion:^(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error) {
@@ -223,6 +346,10 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 			if (strongSelf) strongSelf.albums = albums;
 		}];
 	}
+	if (self.people.count == 0) {
+		[self loadPeople];
+	}
+	[self loadTags];
 }
 
 - (UILabel *)labelWithText:(NSString *)text {
@@ -305,6 +432,128 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	[self presentViewController:navigationController animated:YES completion:nil];
 }
 
+- (void)loadPeople {
+	if (self.peopleLoadInFlight) return;
+	self.peopleLoadInFlight = YES;
+	__weak typeof(self) weakSelf = self;
+	[IMSearchApi allPeopleWithCompletion:^(NSArray<IMPerson *> *_Nullable people, NSError *_Nullable error) {
+		IMSearchFilterViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		strongSelf.peopleLoadInFlight = NO;
+		if (error || people.count == 0) return;
+		strongSelf.people = people;
+	}];
+}
+
+- (void)loadTags {
+	if (self.tagsLoadInFlight) return;
+	self.tagsLoadInFlight = YES;
+	__weak typeof(self) weakSelf = self;
+	[IMTagApi allTagsWithCompletion:^(NSArray<IMTag *> *_Nullable tags, NSError *_Nullable error) {
+		IMSearchFilterViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		strongSelf.tagsLoadInFlight = NO;
+		if (error || tags.count == 0) return;
+		strongSelf.tags = tags;
+	}];
+}
+
+- (void)presentEmptySelectionAlertForTitle:(NSString *)title message:(NSString *)message {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)peopleButtonTapped {
+	NSArray<IMPerson *> *people = [self.people sortedArrayUsingComparator:^NSComparisonResult(IMPerson *a, IMPerson *b) {
+		NSString *aName = a.name.length ? a.name : _(@"Unnamed person");
+		NSString *bName = b.name.length ? b.name : _(@"Unnamed person");
+		NSComparisonResult result = [aName localizedCaseInsensitiveCompare:bName];
+		return result == NSOrderedSame ? [a.personId compare:b.personId] : result;
+	}];
+	NSMutableArray<NSString *> *ids = [NSMutableArray arrayWithCapacity:people.count];
+	NSMutableArray<NSString *> *titles = [NSMutableArray arrayWithCapacity:people.count];
+	NSMutableArray<NSString *> *details = [NSMutableArray arrayWithCapacity:people.count];
+	for (IMPerson *person in people) {
+		if (person.personId.length == 0) continue;
+		[ids addObject:person.personId];
+		[titles addObject:person.name.length ? person.name : _(@"Unnamed person")];
+		[details addObject:person.isHidden ? _(@"Hidden") : @""];
+	}
+	if (ids.count == 0) {
+		[self loadPeople];
+		[self presentEmptySelectionAlertForTitle:_(@"People") message:_(@"No people are available for this account.")];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	IMSearchMultiSelectPickerViewController *picker = [[IMSearchMultiSelectPickerViewController alloc]
+		initWithTitle:_(@"People")
+		itemIds:ids
+		itemTitles:titles
+		itemDetails:details
+		selectedIds:self.selectedPersonIds
+		completion:^(NSSet<NSString *> *selectedIds) {
+			IMSearchFilterViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.selectedPersonIds = [selectedIds mutableCopy];
+			NSString *title;
+			if (selectedIds.count == 0) title = _(@"Any person");
+			else if (selectedIds.count == 1) {
+				NSUInteger index = [ids indexOfObject:[[selectedIds allObjects] firstObject]];
+				title = index != NSNotFound ? titles[index] : _(@"1 person selected");
+			} else title = [NSString stringWithFormat:_(@"%ld people selected"), (long)selectedIds.count];
+			[strongSelf.peopleButton setTitle:title forState:UIControlStateNormal];
+		}];
+	UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
+	navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+	[self presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)tagButtonTapped {
+	NSArray<IMTag *> *tags = [self.tags sortedArrayUsingComparator:^NSComparisonResult(IMTag *a, IMTag *b) {
+		NSString *aName = a.name.length ? a.name : (a.value.length ? a.value : _(@"Unnamed tag"));
+		NSString *bName = b.name.length ? b.name : (b.value.length ? b.value : _(@"Unnamed tag"));
+		NSComparisonResult result = [aName localizedCaseInsensitiveCompare:bName];
+		return result == NSOrderedSame ? [a.tagId compare:b.tagId] : result;
+	}];
+	NSMutableArray<NSString *> *ids = [NSMutableArray arrayWithCapacity:tags.count];
+	NSMutableArray<NSString *> *titles = [NSMutableArray arrayWithCapacity:tags.count];
+	NSMutableArray<NSString *> *details = [NSMutableArray arrayWithCapacity:tags.count];
+	for (IMTag *tag in tags) {
+		if (tag.tagId.length == 0) continue;
+		[ids addObject:tag.tagId];
+		[titles addObject:tag.name.length ? tag.name : (tag.value.length ? tag.value : _(@"Unnamed tag"))];
+		[details addObject:tag.parentId.length ? _(@"Nested tag") : @""];
+	}
+	if (ids.count == 0) {
+		[self loadTags];
+		[self presentEmptySelectionAlertForTitle:_(@"Tags") message:_(@"No tags are available for this account.")];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	IMSearchMultiSelectPickerViewController *picker = [[IMSearchMultiSelectPickerViewController alloc]
+		initWithTitle:_(@"Tags")
+		itemIds:ids
+		itemTitles:titles
+		itemDetails:details
+		selectedIds:self.selectedTagIds
+		completion:^(NSSet<NSString *> *selectedIds) {
+			IMSearchFilterViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.selectedTagIds = [selectedIds mutableCopy];
+			NSString *title;
+			if (selectedIds.count == 0) title = _(@"Any tag");
+			else if (selectedIds.count == 1) {
+				NSUInteger index = [ids indexOfObject:[[selectedIds allObjects] firstObject]];
+				title = index != NSNotFound ? titles[index] : _(@"1 tag selected");
+			} else title = [NSString stringWithFormat:_(@"%ld tags selected"), (long)selectedIds.count];
+			[strongSelf.tagButton setTitle:title forState:UIControlStateNormal];
+		}];
+	UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
+	navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+	[self presentViewController:navigationController animated:YES completion:nil];
+}
+
 - (void)cancelTapped {
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -341,6 +590,12 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	if (self.withStackedSwitch.isOn) criteria[@"withStacked"] = @YES;
 	if (self.selectedAlbumIds.count > 0) {
 		criteria[@"albumIds"] = [[self.selectedAlbumIds allObjects] sortedArrayUsingSelector:@selector(compare:)];
+	}
+	if (self.selectedPersonIds.count > 0) {
+		criteria[@"personIds"] = [[self.selectedPersonIds allObjects] sortedArrayUsingSelector:@selector(compare:)];
+	}
+	if (self.selectedTagIds.count > 0) {
+		criteria[@"tagIds"] = [[self.selectedTagIds allObjects] sortedArrayUsingSelector:@selector(compare:)];
 	}
 	if (self.applyHandler) self.applyHandler(criteria.copy);
 	[self dismissViewControllerAnimated:YES completion:nil];
