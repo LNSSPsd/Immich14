@@ -120,9 +120,6 @@ static void IMClearAccountScopedState(void) {
 	    (![self.baseURL.absoluteString isEqualToString:baseURL.absoluteString] ||
 	     !((self.userId == nil && userId == nil) || [self.userId isEqualToString:userId]) ||
 	     self.authKind != kind);
-	if (accountChanged) {
-		IMClearAccountScopedState();
-	}
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	[defaults setObject:baseURL.absoluteString forKey:kDefaultsBaseURL];
 	if (userId) {
@@ -144,6 +141,9 @@ static void IMClearAccountScopedState(void) {
 	self.userId = userId;
 	self.authKind = kind;
 	self.passwordChangeRequired = passwordChangeRequired;
+	if (accountChanged) {
+		IMClearAccountScopedState();
+	}
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:IMSessionDidChangeNotification object:self];
 }
