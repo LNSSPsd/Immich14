@@ -24,8 +24,10 @@
 @property (nonatomic, strong, nullable) IMAssetDetail *detail;
 @property (nonatomic, strong, nullable) NSDictionary *rawDetail;
 @property (nonatomic, strong, nullable) NSArray<NSString *> *ocrTexts;
+@property (nonatomic, strong) NSArray<NSDictionary *> *customMetadata;
 @property (nonatomic) BOOL detailLoaded;
 @property (nonatomic) BOOL ocrLoaded;
+@property (nonatomic) BOOL customMetadataLoaded;
 @property (nonatomic) BOOL tagControlsBusy;
 @property (nonatomic) BOOL operationBusy;
 @property (nonatomic, strong) UIBarButtonItem *operationsButton;
@@ -117,6 +119,8 @@
 	[self.spinner startAnimating];
 	self.detailLoaded = NO;
 	self.ocrLoaded = NO;
+	self.customMetadataLoaded = NO;
+	self.customMetadata = @[];
 	[self setTagControlsBusy:YES];
 	__weak typeof(self) weakSelf = self;
 	NSString *path = [NSString stringWithFormat:@"/assets/%@", self.assetId];
@@ -137,6 +141,12 @@
 		    }
 		    weakSelf.ocrTexts = texts;
 		    weakSelf.ocrLoaded = YES;
+		    [weakSelf rebuildSectionsIfReady];
+	    }];
+	[IMAssetApi metadataForAssetId:self.assetId
+	                    completion:^(NSArray<NSDictionary *> *_Nullable metadata, NSError *_Nullable error) {
+		    weakSelf.customMetadata = metadata ?: @[];
+		    weakSelf.customMetadataLoaded = YES;
 		    [weakSelf rebuildSectionsIfReady];
 	    }];
 }
@@ -233,6 +243,20 @@
 	}
 	if (self.ocrTexts.count > 0) {
 		[sections addObject:[self sectionWithTitle:_(@"Text Found") rows:self.ocrTexts]];
+	}
+	if (self.customMetadataLoaded && self.customMetadata.count > 0) {
+		NSMutableArray<NSString *> *metadataRows = [NSMutableArray arrayWithCapacity:self.customMetadata.count];
+		for (NSDictionary *item in self.customMetadata) {
+			NSString *key = [item[@"key"] isKindOfClass:[NSString class]] ? item[@"key"] : @"";
+			NSDictionary *value = [item[@"value"] isKindOfClass:[NSDictionary class]] ? item[@"value"] : @{};
+			NSData *jsonData = [NSJSONSerialization dataWithJSONObject:value
+		                                                       options:(NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys)
+		                                                         error:NULL];
+			NSString *valueText = jsonData.length ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : value.description;
+			NSString *row = valueText.length ? [NSString stringWithFormat:@"%@: %@", key, valueText] : key;
+			[metadataRows addObject:row];
+		}
+		[sections addObject:[self sectionWithTitle:_(@"Custom Metadata") rows:metadataRows]];
 	}
 
 	self.sections = sections;
@@ -395,11 +419,119 @@
 				[weakSelf presentAssetJobPicker];
 			});
 	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Set custom metadata")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+				[weakSelf presentCustomMetadataSetter];
+			});
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Delete custom metadata")
+	                                           style:UIAlertActionStyleDestructive
+	                                         handler:^(UIAlertAction *action) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+				[weakSelf presentCustomMetadataDeleter];
+			});
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
 	if (sheet.popoverPresentationController) {
 		sheet.popoverPresentationController.barButtonItem = self.operationsButton;
 	}
 	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)presentCustomMetadataSetter {
+	if (!self.rawDetail || self.operationBusy) {
+		return;
+	}
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Set custom metadata")
+                                                                     message:_(@"The value must be a JSON object, for example { \"text\": \"value\" }.")
+	                                                              preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Metadata key");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Value (JSON object)");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+		field.keyboardType = UIKeyboardTypeASCIICapable;
+	}];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AssetDetailViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *key = [alert.textFields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		NSString *rawValue = [alert.textFields[1].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		if (!key.length || !rawValue.length) {
+			[strongSelf showOperationError:nil title:_(@"Enter a metadata key and JSON value")];
+			return;
+		}
+		NSData *valueData = [rawValue dataUsingEncoding:NSUTF8StringEncoding];
+		NSError *parseError = nil;
+		id value = valueData.length ? [NSJSONSerialization JSONObjectWithData:valueData options:0 error:&parseError] : nil;
+		if (![value isKindOfClass:[NSDictionary class]]) {
+			NSString *message = parseError.localizedDescription ?: _(@"The value must be a JSON object.");
+			[strongSelf showOperationError:[NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{ NSLocalizedDescriptionKey: message }]
+			                             title:_(@"Invalid metadata value")];
+			return;
+		}
+		[strongSelf setOperationBusy:YES];
+		[IMAssetApi upsertMetadataForAssetId:strongSelf.assetId
+		                              items:@[ @{ @"key": key, @"value": value } ]
+		                         completion:^(NSArray<NSDictionary *> *metadata, NSError *error) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[strongSelf setOperationBusy:NO];
+				if (error || !metadata) {
+					[strongSelf showOperationError:error title:_(@"Couldn't save custom metadata")];
+					return;
+				}
+				[strongSelf showOperationMessage:_(@"Custom metadata saved.") title:_(@"Metadata updated")];
+				[strongSelf loadData];
+			});
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)presentCustomMetadataDeleter {
+	if (!self.rawDetail || self.operationBusy) {
+		return;
+	}
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Delete custom metadata")
+	                                                                     message:_(@"Enter the key to remove from this asset.")
+	                                                              preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Metadata key");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Delete") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+		AssetDetailViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *key = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		if (!key.length) {
+			[strongSelf showOperationError:nil title:_(@"Enter a metadata key")];
+			return;
+		}
+		[strongSelf setOperationBusy:YES];
+		[IMAssetApi deleteMetadataKey:key forAssetId:strongSelf.assetId completion:^(BOOL success, NSError *error) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[strongSelf setOperationBusy:NO];
+				if (!success || error) {
+					[strongSelf showOperationError:error title:_(@"Couldn't delete custom metadata")];
+					return;
+				}
+				[strongSelf showOperationMessage:_(@"Custom metadata deleted.") title:_(@"Metadata updated")];
+				[strongSelf loadData];
+			});
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)presentCopyTargetPrompt {
