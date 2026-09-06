@@ -32,7 +32,10 @@ static BOOL IMActivityOptionalUUIDv4(id value) {
 	if (value == nil) {
 		return YES;
 	}
-	return [value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0 && IMActivityUUIDv4(value);
+	if (![value isKindOfClass:[NSString class]]) {
+		return NO;
+	}
+	return [(NSString *)value length] == 0 || IMActivityUUIDv4(value);
 }
 
 @implementation IMActivityApi
