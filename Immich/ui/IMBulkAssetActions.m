@@ -115,6 +115,7 @@
 			strongSelf.submitting = NO;
 			if (error) {
 				strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+				strongSelf.navigationItem.rightBarButtonItem.enabled = strongSelf.tableView.indexPathsForSelectedRows.count > 0;
 				[strongSelf showError:error];
 				return;
 			}
