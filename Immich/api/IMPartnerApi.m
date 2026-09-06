@@ -35,18 +35,26 @@ static BOOL IMPartnerJSONBoolean(id value) {
            ([(NSNumber *)value doubleValue] == 0.0 || [(NSNumber *)value doubleValue] == 1.0);
 }
 
+static BOOL IMPartnerAvatarColor(id value) {
+	return [value isKindOfClass:[NSString class]] &&
+	       [[NSSet setWithArray:@[ @"primary", @"pink", @"red", @"yellow", @"blue", @"green", @"purple", @"orange", @"gray", @"amber" ]] containsObject:value];
+}
+
 static BOOL IMPartnerRawUserIsValid(NSDictionary *dictionary, BOOL requireTimeline) {
     if (![dictionary isKindOfClass:[NSDictionary class]] || !IMPartnerUUIDv4(dictionary[@"id"]) ||
         ![dictionary[@"name"] isKindOfClass:[NSString class]] ||
         ![dictionary[@"email"] isKindOfClass:[NSString class]] ||
         ![dictionary[@"profileImagePath"] isKindOfClass:[NSString class]] ||
-        ![dictionary[@"avatarColor"] isKindOfClass:[NSString class]]) return NO;
+        !IMPartnerAvatarColor(dictionary[@"avatarColor"]) ||
+        ![dictionary[@"profileChangedAt"] isKindOfClass:[NSString class]] ||
+        !IMDateFromServerTimestamp(dictionary[@"profileChangedAt"])) return NO;
     return !requireTimeline || IMPartnerJSONBoolean(dictionary[@"inTimeline"]);
 }
 
 static BOOL IMPartnerResponseIsValid(IMPartner *partner) {
     return partner != nil && IMPartnerUUIDv4(partner.partnerId) && partner.name != nil &&
-           partner.email != nil && partner.profileImagePath != nil && partner.avatarColor != nil;
+           partner.email != nil && partner.profileImagePath != nil && partner.avatarColor != nil &&
+           partner.profileChangedAt.length > 0 && IMDateFromServerTimestamp(partner.profileChangedAt);
 }
 
 @implementation IMPartnerApi

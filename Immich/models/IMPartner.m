@@ -8,6 +8,7 @@ static id IMPartnerValue(id v) { return [v isKindOfClass:[NSNull class]] ? nil :
 @property (nonatomic, copy) NSString *email;
 @property (nonatomic, copy) NSString *profileImagePath;
 @property (nonatomic, copy) NSString *avatarColor;
+@property (nonatomic, copy) NSString *profileChangedAt;
 @property (nonatomic) BOOL inTimeline;
 @end
 
@@ -21,6 +22,7 @@ static id IMPartnerValue(id v) { return [v isKindOfClass:[NSNull class]] ? nil :
     p.email=[email isKindOfClass:[NSString class]] ? email : @"";
     id path=IMPartnerValue(d[@"profileImagePath"]); p.profileImagePath=[path isKindOfClass:[NSString class]] ? path : @"";
     id color=IMPartnerValue(d[@"avatarColor"]); p.avatarColor=[color isKindOfClass:[NSString class]] ? color : @"";
+    id changed=IMPartnerValue(d[@"profileChangedAt"]); p.profileChangedAt=[changed isKindOfClass:[NSString class]] ? changed : @"";
     id timeline=IMPartnerValue(d[@"inTimeline"]); p.inTimeline=[timeline isKindOfClass:[NSNumber class]] && [timeline boolValue];
     return p;
 }

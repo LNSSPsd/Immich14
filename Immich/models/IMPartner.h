@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, readonly) NSString *email;
 @property (nonatomic, copy, readonly) NSString *profileImagePath;
 @property (nonatomic, copy, readonly) NSString *avatarColor;
+@property (nonatomic, copy, readonly) NSString *profileChangedAt;
 @property (nonatomic, readonly) BOOL inTimeline;
 + (nullable instancetype)partnerWithDictionary:(NSDictionary *)dictionary;
 + (NSArray<IMPartner *> *)partnersWithArray:(NSArray *)array;
