@@ -25,6 +25,10 @@ presentingController:(UIViewController *)presenter
 + (void)presentAddToAlbumForAssets:(NSArray<IMAsset *> *)assets
               presentingController:(UIViewController *)presenter;
 
++ (void)presentTagPickerForAssets:(NSArray<IMAsset *> *)assets
+             presentingController:(UIViewController *)presenter
+                        completion:(void (^)(BOOL success))completion;
+
 + (void)presentVisibilityPickerForAssets:(NSArray<IMAsset *> *)assets
                     presentingController:(UIViewController *)presenter
                                completion:(void (^)(BOOL success))completion;

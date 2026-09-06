@@ -65,6 +65,7 @@ static const CGFloat kFooterHeight = 56;
 @property (nonatomic, strong) UIBarButtonItem *stackButton;
 @property (nonatomic, strong) UIBarButtonItem *deleteButton;
 @property (nonatomic, strong) UIBarButtonItem *jobButton;
+@property (nonatomic, strong) UIBarButtonItem *tagButton;
 
 @property (nonatomic) NSInteger columnStepIndex; 
 @property (nonatomic) CGFloat liveColumns;        
@@ -374,7 +375,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (NSArray<UIBarButtonItem *> *)makeSelectionToolbarItems {
-	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *moveImage = nil, *stackImage = nil, *trashImage = nil, *jobImage = nil;
+	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *moveImage = nil, *stackImage = nil, *trashImage = nil, *jobImage = nil, *tagImage = nil;
 	if (@available(iOS 13.0, *)) {
 		starImage = [UIImage systemImageNamed:@"star"];
 		albumImage = [UIImage systemImageNamed:@"plus.rectangle.on.folder"];
@@ -383,6 +384,7 @@ static const CGFloat kCellSpacing = 2;
 		stackImage = [UIImage systemImageNamed:@"square.stack.3d.up"];
 		trashImage = [UIImage systemImageNamed:@"trash"];
 		jobImage = [UIImage systemImageNamed:@"gearshape"];
+		tagImage = [UIImage systemImageNamed:@"tag"];
 	}
 	self.favoriteButton = [[UIBarButtonItem alloc] initWithImage:starImage style:UIBarButtonItemStylePlain target:self action:@selector(favoriteSelected)];
 	self.addAlbumButton = [[UIBarButtonItem alloc] initWithImage:albumImage style:UIBarButtonItemStylePlain target:self action:@selector(addSelectedToAlbum)];
@@ -391,6 +393,8 @@ static const CGFloat kCellSpacing = 2;
 	self.stackButton = [[UIBarButtonItem alloc] initWithImage:stackImage style:UIBarButtonItemStylePlain target:self action:@selector(stackSelected)];
 	self.jobButton = [[UIBarButtonItem alloc] initWithImage:jobImage style:UIBarButtonItemStylePlain target:self action:@selector(jobSelected)];
 	self.jobButton.accessibilityLabel = _(@"Run asset job");
+	self.tagButton = [[UIBarButtonItem alloc] initWithImage:tagImage style:UIBarButtonItemStylePlain target:self action:@selector(tagSelected)];
+	self.tagButton.accessibilityLabel = _(@"Add Tags");
 	self.deleteButton = [[UIBarButtonItem alloc] initWithImage:trashImage style:UIBarButtonItemStylePlain target:self action:@selector(deleteSelected)];
 	if (@available(iOS 13.0, *)) {
 		self.deleteButton.tintColor = UIColor.systemRedColor;
@@ -401,7 +405,8 @@ static const CGFloat kCellSpacing = 2;
 	UIBarButtonItem *flex4 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex5 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex6 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.visibilityButton, flex4, self.stackButton, flex5, self.jobButton, flex6, self.deleteButton ];
+	UIBarButtonItem *flex7 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.visibilityButton, flex4, self.stackButton, flex5, self.jobButton, flex6, self.tagButton, flex7, self.deleteButton ];
 }
 
 - (void)updateSelectionToolbarState {
@@ -412,6 +417,7 @@ static const CGFloat kCellSpacing = 2;
 	self.visibilityButton.enabled = hasSelection;
 	self.stackButton.enabled = self.selectedAssets.count >= 2;
 	self.jobButton.enabled = hasSelection;
+	self.tagButton.enabled = hasSelection;
 	self.deleteButton.enabled = hasSelection;
 	[self updateTitleBarForSelectionState];
 }
@@ -448,6 +454,16 @@ static const CGFloat kCellSpacing = 2;
 		if (success) {
 			[weakSelf toggleSelecting];
 		}
+	}];
+}
+
+- (void)tagSelected {
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions presentTagPickerForAssets:assets
+	                         presentingController:self
+	                                    completion:^(BOOL success) {
+		if (success) [weakSelf toggleSelecting];
 	}];
 }
 

@@ -5,9 +5,21 @@
 #import "IMDownloadApi.h"
 #import "IMDownloadArchiveInfo.h"
 #import "IMStackApi.h"
+#import "IMTagApi.h"
 #import "AddToAlbumViewController.h"
 #import "common.h"
 #import <Photos/Photos.h>
+
+@interface IMBulkTagPickerController : UITableViewController
+@property (nonatomic, copy) NSArray<IMTag *> *tags;
+@property (nonatomic, copy) NSArray<NSString *> *assetIds;
+@property (nonatomic, copy, nullable) void (^resultCompletion)(BOOL success);
+@property (nonatomic) BOOL submitting;
+@property (nonatomic) BOOL completionDelivered;
+- (instancetype)initWithTags:(NSArray<IMTag *> *)tags
+                     assetIds:(NSArray<NSString *> *)assetIds
+                   completion:(nullable void (^)(BOOL success))completion;
+@end
 
 @interface IMBulkAssetActions ()
 + (void)saveAssetsToPhotos:(NSArray<IMAsset *> *)assets
@@ -16,6 +28,129 @@
 + (void)downloadArchiveAssets:(NSArray<IMAsset *> *)assets
          presentingController:(UIViewController *)presenter
                     completion:(void (^)(void))completion;
+@end
+
+@implementation IMBulkTagPickerController
+
+- (instancetype)initWithTags:(NSArray<IMTag *> *)tags
+                     assetIds:(NSArray<NSString *> *)assetIds
+                   completion:(void (^)(BOOL success))completion {
+	self = [super initWithStyle:UITableViewStyleInsetGrouped];
+	if (self) {
+		_tags = [tags copy];
+		_assetIds = [assetIds copy];
+		_resultCompletion = [completion copy];
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = _(@"Add Tags");
+	self.tableView.allowsMultipleSelection = YES;
+	self.tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectZero];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+	                                                                                         target:self
+	                                                                                         action:@selector(cancelTapped)];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Apply")
+	                                                                               style:UIBarButtonItemStyleDone
+	                                                                              target:self
+	                                                                              action:@selector(applyTapped)];
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+}
+
+- (void)showError:(NSError *)error {
+	NSString *message = error.localizedDescription.length ? error.localizedDescription : _(@"The server rejected this request.");
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Add Tags")
+	                                                                     message:message
+	                                                              preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)deliverCompletion:(BOOL)success {
+	if (self.completionDelivered) return;
+	self.completionDelivered = YES;
+	void (^completion)(BOOL) = self.resultCompletion;
+	self.resultCompletion = nil;
+	if (completion) completion(success);
+}
+
+- (void)cancelTapped {
+	[self deliverCompletion:NO];
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)applyTapped {
+	if (self.submitting) return;
+	NSArray<NSIndexPath *> *selected = self.tableView.indexPathsForSelectedRows;
+	if (selected.count == 0) {
+		[self showError:[NSError errorWithDomain:IMApiErrorDomain
+		                                    code:1
+		                                userInfo:@{ NSLocalizedDescriptionKey: _(@"Choose at least one tag.") }]];
+		return;
+	}
+	NSMutableArray<NSString *> *tagIds = [NSMutableArray arrayWithCapacity:selected.count];
+	for (NSIndexPath *indexPath in selected) {
+		if (indexPath.row >= 0 && indexPath.row < (NSInteger)self.tags.count) {
+			NSString *tagId = self.tags[indexPath.row].tagId;
+			if (tagId.length > 0 && ![tagIds containsObject:tagId]) [tagIds addObject:tagId];
+		}
+	}
+	if (tagIds.count == 0 || self.assetIds.count == 0) {
+		[self showError:[NSError errorWithDomain:IMApiErrorDomain
+		                                    code:1
+		                                userInfo:@{ NSLocalizedDescriptionKey: _(@"Choose at least one tag and photo.") }]];
+		return;
+	}
+	self.submitting = YES;
+	self.navigationItem.leftBarButtonItem.enabled = NO;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+	__weak typeof(self) weakSelf = self;
+	[IMTagApi bulkTagIds:tagIds assetIds:self.assetIds completion:^(NSInteger count, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			IMBulkTagPickerController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			(void)count;
+			strongSelf.submitting = NO;
+			if (error) {
+				strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+				[strongSelf showError:error];
+				[strongSelf deliverCompletion:NO];
+				return;
+			}
+			[strongSelf dismissViewControllerAnimated:YES completion:^{
+				[strongSelf deliverCompletion:YES];
+			}];
+		} );
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.tags.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *identifier = @"bulk-tag-cell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+	if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
+	IMTag *tag = self.tags[indexPath.row];
+	cell.textLabel.text = tag.value.length ? tag.value : tag.name;
+	cell.detailTextLabel.text = tag.value.length && tag.name.length && ![tag.value isEqualToString:tag.name] ? tag.name : nil;
+	cell.accessoryType = [tableView.indexPathsForSelectedRows containsObject:indexPath] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView cellForRowAtIndexPath:indexPath].accessoryType = UITableViewCellAccessoryCheckmark;
+	self.navigationItem.rightBarButtonItem.enabled = YES;
+}
+
+- (void)tableView:(UITableView *)tableView didDeselectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView cellForRowAtIndexPath:indexPath].accessoryType = UITableViewCellAccessoryNone;
+	self.navigationItem.rightBarButtonItem.enabled = tableView.indexPathsForSelectedRows.count > 0;
+}
+
 @end
 
 @implementation IMBulkAssetActions
@@ -497,6 +632,46 @@ presentingController:(UIViewController *)presenter
 	AddToAlbumViewController *picker = [AddToAlbumViewController pickerForAssetIds:[self idsForAssets:assets]];
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:picker];
 	[presenter presentViewController:nav animated:YES completion:nil];
+}
+
++ (void)presentTagPickerForAssets:(NSArray<IMAsset *> *)assets
+             presentingController:(UIViewController *)presenter
+                        completion:(void (^)(BOOL success))completion {
+	NSArray<NSString *> *assetIds = [self idsForAssets:assets];
+	if (assetIds.count == 0) {
+		[self showErrorAlertWithTitle:_(@"Couldn't Add Tags")
+		                        message:_(@"Select at least one valid server asset.")
+		          presentingController:presenter];
+		if (completion) completion(NO);
+		return;
+	}
+	__weak UIViewController *weakPresenter = presenter;
+	[IMTagApi allTagsWithCompletion:^(NSArray<IMTag *> *tags, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIViewController *strongPresenter = weakPresenter;
+			if (!strongPresenter) return;
+			if (error) {
+				[self showErrorAlertWithTitle:_(@"Couldn't Load Tags")
+				                        message:error.localizedDescription
+				          presentingController:strongPresenter];
+				if (completion) completion(NO);
+				return;
+			}
+			if (tags.count == 0) {
+				[self showErrorAlertWithTitle:_(@"No Tags")
+				                        message:_(@"Create a tag in Settings → Tags before adding one to photos.")
+				          presentingController:strongPresenter];
+				if (completion) completion(NO);
+				return;
+			}
+			IMBulkTagPickerController *picker = [[IMBulkTagPickerController alloc] initWithTags:tags
+			                                                                    assetIds:assetIds
+			                                                                  completion:completion];
+			UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
+			navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+			[strongPresenter presentViewController:navigationController animated:YES completion:nil];
+		});
+	}];
 }
 
 @end
