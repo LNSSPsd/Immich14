@@ -90,7 +90,7 @@ static BOOL IMSearchDateKey(NSString *key) {
 	] containsObject:key];
 }
 
-static NSSet<NSString *> *IMSearchCriteriaKeys(BOOL random, BOOL statistics) {
+static NSSet<NSString *> *IMSearchCriteriaKeys(BOOL random, BOOL statistics, BOOL metadata) {
 	NSMutableSet<NSString *> *keys = [NSMutableSet setWithArray:@[
 		@"libraryId", @"type", @"isEncoded", @"isFavorite", @"isMotion", @"isOffline", @"visibility",
 		@"createdBefore", @"createdAfter", @"updatedBefore", @"updatedAfter", @"trashedBefore", @"trashedAfter",
@@ -99,15 +99,21 @@ static NSSet<NSString *> *IMSearchCriteriaKeys(BOOL random, BOOL statistics) {
 	]];
 	if (!statistics) {
 		[keys addObjectsFromArray:@[@"withDeleted", @"withExif", @"size"]];
-		if (!random) {
+		if (!random && !metadata) {
 			[keys addObject:@"minFileSize"];
 		}
 	}
-	if (random) {
+	if (random || metadata) {
 		[keys addObjectsFromArray:@[@"withPeople", @"withStacked"]];
 	}
 	if (statistics) {
 		[keys addObject:@"description"];
+	}
+	if (metadata) {
+		[keys addObjectsFromArray:@[
+			@"id", @"description", @"checksum", @"originalFileName", @"originalPath",
+			@"previewPath", @"thumbnailPath", @"encodedVideoPath", @"order", @"page",
+		]];
 	}
 	return keys.copy;
 }
@@ -115,6 +121,7 @@ static NSSet<NSString *> *IMSearchCriteriaKeys(BOOL random, BOOL statistics) {
 static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSString *, id> *criteria,
 	                                                              BOOL random,
 	                                                              BOOL statistics,
+	                                                              BOOL metadata,
 	                                                              NSError **errorOut) {
 	if (!criteria) {
 		return @{};
@@ -123,7 +130,7 @@ static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSSt
 		if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search criteria must be an object."));
 		return nil;
 	}
-	NSSet<NSString *> *allowed = IMSearchCriteriaKeys(random, statistics);
+	NSSet<NSString *> *allowed = IMSearchCriteriaKeys(random, statistics, metadata);
 	for (id rawKey in criteria) {
 		if (![rawKey isKindOfClass:[NSString class]] || ![allowed containsObject:rawKey]) {
 			if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search criteria contains an unsupported field."));
@@ -136,7 +143,7 @@ static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSSt
 			return nil;
 		}
 		if ([value isKindOfClass:[NSNull class]]) {
-			if (!random && !statistics) {
+			if (!random && !statistics && !metadata) {
 				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Nullable filters are not supported for large-asset queries."));
 				return nil;
 			}
@@ -175,6 +182,16 @@ static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSSt
 			}
 			continue;
 		}
+		if ([key isEqualToString:@"page"]) {
+			if (![value isKindOfClass:[NSNumber class]] ||
+			    !isfinite([value doubleValue]) ||
+			    floor([value doubleValue]) != [value doubleValue] ||
+			    [value doubleValue] < 1.0 || [value doubleValue] > 9007199254740991.0) {
+				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search page must be a positive integer."));
+				return nil;
+			}
+			continue;
+		}
 		if ([key isEqualToString:@"minFileSize"]) {
 			if (![value isKindOfClass:[NSNumber class]] ||
 			    !isfinite([value doubleValue]) ||
@@ -208,6 +225,21 @@ static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSSt
 			}
 			continue;
 		}
+		if ([key isEqualToString:@"order"]) {
+			if (![value isKindOfClass:[NSString class]] ||
+			    ![@[ @"asc", @"desc" ] containsObject:value]) {
+				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search order is invalid."));
+				return nil;
+			}
+			continue;
+		}
+		if ([key isEqualToString:@"id"]) {
+			if (!IMSearchUUIDString(value)) {
+				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Asset ID must be a valid UUID."));
+				return nil;
+			}
+			continue;
+		}
 		if ([key isEqualToString:@"libraryId"]) {
 			if (!IMSearchUUIDString(value)) {
 				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Library ID must be a valid UUID."));
@@ -222,7 +254,9 @@ static NSDictionary<NSString *, id> *IMSearchValidatedCriteria(NSDictionary<NSSt
 			}
 			continue;
 		}
-		if (IMSearchStringKey(key) || [key isEqualToString:@"description"]) {
+		if (IMSearchStringKey(key) || [key isEqualToString:@"description"] ||
+		    (metadata && [@[ @"checksum", @"originalFileName", @"originalPath", @"previewPath",
+		                     @"thumbnailPath", @"encodedVideoPath" ] containsObject:key])) {
 			if (!IMSearchNonEmptyString(value)) {
 				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search text fields cannot be empty."));
 				return nil;
@@ -271,8 +305,17 @@ static BOOL IMSearchAssetBodyIsValid(NSDictionary *body, NSError **errorOut) {
 		if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search criteria must be an object."));
 		return NO;
 	}
-	for (NSString *key in @[ @"query", @"ocr", @"originalFileName", @"description", @"city" ]) {
-		if (body[key] != nil && !IMSearchNonEmptyString(body[key])) {
+	for (NSString *key in @[ @"query", @"ocr", @"originalFileName", @"description", @"city", @"state",
+	                         @"country", @"make", @"model", @"lensModel" ]) {
+		id value = body[key];
+		if ([value isKindOfClass:[NSNull class]]) {
+			if (![@[ @"city", @"state", @"country", @"make", @"model", @"lensModel" ] containsObject:key]) {
+				if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search text cannot be null."));
+				return NO;
+			}
+			continue;
+		}
+		if (value != nil && !IMSearchNonEmptyString(value)) {
 			if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search text cannot be empty."));
 			return NO;
 		}
@@ -280,6 +323,11 @@ static BOOL IMSearchAssetBodyIsValid(NSDictionary *body, NSError **errorOut) {
 	for (NSString *key in @[ @"personIds", @"tagIds" ]) {
 		id value = body[key];
 		if (value == nil) continue;
+		if ([value isKindOfClass:[NSNull class]]) {
+			if ([key isEqualToString:@"tagIds"]) continue;
+			if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search ID filters must be arrays."));
+			return NO;
+		}
 		if (![value isKindOfClass:[NSArray class]]) {
 			if (errorOut) *errorOut = IMSearchInvalidInput(_(@"Search ID filters must be arrays."));
 			return NO;
@@ -371,7 +419,9 @@ static const NSInteger kIMPeoplePageSize = 1000;
 	}
 	NSMutableDictionary *pagedBody = [body mutableCopy];
 	pagedBody[@"page"] = @(page < 1 ? 1 : page);
-	pagedBody[@"size"] = @(kIMSearchPageSize);
+	if (pagedBody[@"size"] == nil) {
+		pagedBody[@"size"] = @(kIMSearchPageSize);
+	}
 	return [[IMApiClient shared] POST:path
 	                              body:pagedBody
 	                        completion:^(id _Nullable json, NSError *_Nullable error) {
@@ -501,6 +551,23 @@ static const NSInteger kIMPeoplePageSize = 1000;
 	                    body:@{ @"isFavorite": @(favorite) }
 	                     page:page
 	              completion:completion];
+}
+
++ (nullable NSURLSessionTask *)metadataSearchWithCriteria:(nullable NSDictionary<NSString *, id> *)criteria
+                                                     page:(NSInteger)page
+                                               completion:(void (^)(NSArray<IMAsset *> *, NSString *, NSError *))completion {
+	if (!completion) {
+		return nil;
+	}
+	NSError *validationError = nil;
+	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, NO, NO, YES, &validationError);
+	if (!validated) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(nil, nil, validationError ?: IMSearchInvalidInput(_(@"Invalid metadata search criteria.")));
+		});
+		return nil;
+	}
+	return [self postSearch:@"/search/metadata" body:validated page:page completion:completion];
 }
 
 #pragma mark - People
@@ -826,7 +893,7 @@ static const NSInteger kIMPeoplePageSize = 1000;
 		return nil;
 	}
 	NSError *validationError = nil;
-	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, YES, NO, &validationError);
+	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, YES, NO, NO, &validationError);
 	if (!validated) {
 		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, validationError); });
 		return nil;
@@ -850,7 +917,7 @@ static const NSInteger kIMPeoplePageSize = 1000;
 		return nil;
 	}
 	NSError *validationError = nil;
-	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, NO, NO, &validationError);
+	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, NO, NO, NO, &validationError);
 	if (!validated) {
 		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, validationError); });
 		return nil;
@@ -876,7 +943,7 @@ static const NSInteger kIMPeoplePageSize = 1000;
 		return nil;
 	}
 	NSError *validationError = nil;
-	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, NO, YES, &validationError);
+	NSDictionary<NSString *, id> *validated = IMSearchValidatedCriteria(criteria, NO, YES, NO, &validationError);
 	if (!validated) {
 		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, validationError); });
 		return nil;
