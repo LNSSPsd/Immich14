@@ -9,9 +9,7 @@ static BOOL IMAccountSessionResponseIsValid(id value) {
 }
 
 static BOOL IMAccountAPIKeyResponseIsValid(id value) {
-	return [value isKindOfClass:[NSDictionary class]] &&
-	       [value[@"id"] isKindOfClass:[NSString class]] && [value[@"id"] length] > 0 &&
-	       [value[@"permissions"] isKindOfClass:[NSArray class]];
+	return [IMAPIKey keyWithResponseDictionary:value] != nil;
 }
 
 static BOOL IMAccountUUIDv4IsValid(NSString *value) {
@@ -159,7 +157,9 @@ static NSString *IMAccountPathComponent(NSString *value) {
 				return;
 			}
 		}
-		completion([IMAPIKey keysWithArray:json], nil);
+		NSMutableArray<IMAPIKey *> *keys = [NSMutableArray arrayWithCapacity:[(NSArray *)json count]];
+		for (NSDictionary *value in (NSArray *)json) [keys addObject:[IMAPIKey keyWithResponseDictionary:value]];
+		completion(keys, nil);
 	}];
 }
 
@@ -173,7 +173,7 @@ static NSString *IMAccountPathComponent(NSString *value) {
 			completion(nil, [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid current API-key response.")}]);
 			return;
 		}
-		IMAPIKey *key = [[IMAPIKey alloc] initWithDictionary:json];
+		IMAPIKey *key = [IMAPIKey keyWithResponseDictionary:json];
 		completion(key, key.keyId.length ? nil : [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid current API-key response.")}]);
 	}];
 }
@@ -199,7 +199,7 @@ static NSString *IMAccountPathComponent(NSString *value) {
 		}
 		NSDictionary *response = (NSDictionary *)json;
 		id keyJSON = response[@"apiKey"];
-		IMAPIKey *key = [keyJSON isKindOfClass:[NSDictionary class]] ? [[IMAPIKey alloc] initWithDictionary:keyJSON] : nil;
+		IMAPIKey *key = [IMAPIKey keyWithResponseDictionary:keyJSON];
 		id secret = response[@"secret"];
 		if (!key || key.keyId.length == 0 || ![secret isKindOfClass:[NSString class]] || [secret length] == 0) {
 			completion(nil, nil, [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid API-key response.")}]);
@@ -237,7 +237,7 @@ static NSString *IMAccountPathComponent(NSString *value) {
 			                                userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid API-key response.")}]);
 			return;
 		}
-		IMAPIKey *key = [[IMAPIKey alloc] initWithDictionary:json];
+		IMAPIKey *key = [IMAPIKey keyWithResponseDictionary:json];
 		if (!key || key.keyId.length == 0) {
 			completion(nil, [NSError errorWithDomain:IMApiErrorDomain
 			                                    code:2

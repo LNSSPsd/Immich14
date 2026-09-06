@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, readonly) NSString *createdAt;
 @property (nonatomic, copy, readonly) NSString *updatedAt;
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary;
++ (nullable instancetype)keyWithResponseDictionary:(NSDictionary *)dictionary;
 + (NSArray<IMAPIKey *> *)keysWithArray:(NSArray *)array;
 @end
 
