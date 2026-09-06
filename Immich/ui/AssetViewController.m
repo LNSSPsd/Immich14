@@ -1219,6 +1219,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @interface AssetViewController () <UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate, UIViewControllerTransitioningDelegate>
 @property (nonatomic, strong) NSArray<IMAsset *> *assets;
 @property (nonatomic) NSInteger currentIndex;
+@property (nonatomic) BOOL readOnly;
 @property (nonatomic, strong) UIPageViewController *pageViewController;
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
@@ -1244,9 +1245,16 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @implementation AssetViewController
 
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets startIndex:(NSInteger)startIndex {
+	return [self viewerWithAssets:assets startIndex:startIndex readOnly:NO];
+}
+
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                         readOnly:(BOOL)readOnly {
 	AssetViewController *vc = [[AssetViewController alloc] init];
 	vc.assets = assets;
 	vc.currentIndex = startIndex;
+	vc.readOnly = readOnly;
 	vc.favoriteOverrides = [NSMutableDictionary dictionary];
 	vc.modalPresentationStyle = UIModalPresentationFullScreen;
 	vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
@@ -1362,15 +1370,18 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	[self.bottomBar.contentView addSubview:self.shareButton];
 
 	self.favoriteButton = [self chromeButtonWithSymbol:@"heart"];
+	self.favoriteButton.hidden = self.readOnly;
 	[self.favoriteButton addTarget:self action:@selector(favoriteTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.favoriteButton];
 
 	self.editButton = [self chromeButtonWithSymbol:@"slider.horizontal.3"];
+	self.editButton.hidden = self.readOnly;
 	self.editButton.accessibilityLabel = _(@"Edit photo");
 	[self.editButton addTarget:self action:@selector(editCurrentAsset) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.editButton];
 
 	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
+	self.addToAlbumButton.hidden = self.readOnly;
 	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:self.addToAlbumButton];
 
@@ -1513,6 +1524,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)addToAlbumTapped {
+	if (self.readOnly || self.assets.count == 0) return;
 	IMAsset *asset = self.assets[self.currentIndex];
 	AddToAlbumViewController *picker = [AddToAlbumViewController pickerForAssetId:asset.assetId];
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:picker];
@@ -1540,13 +1552,13 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
-	BOOL available = asset.isImage && asset.livePhotoVideoId.length == 0;
+	BOOL available = !self.readOnly && asset.isImage && asset.livePhotoVideoId.length == 0;
 	self.editButton.hidden = !available;
 	self.editButton.enabled = available;
 }
 
 - (void)editCurrentAsset {
-	if (self.assets.count == 0) {
+	if (self.readOnly || self.assets.count == 0) {
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
@@ -1574,6 +1586,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 }
 
 - (void)favoriteTapped {
+	if (self.readOnly || self.assets.count == 0) return;
 	IMAsset *asset = self.assets[self.currentIndex];
 	NSString *assetId = asset.assetId;
 	BOOL newValue = ![self isCurrentAssetFavorite];

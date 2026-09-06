@@ -243,7 +243,7 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 		[collectionView deselectItemAtIndexPath:indexPath animated:YES];
 		return;
 	}
-	AssetViewController *viewer = [AssetViewController viewerWithAssets:assets startIndex:indexPath.item];
+	AssetViewController *viewer = [AssetViewController viewerWithAssets:assets startIndex:indexPath.item readOnly:YES];
 	[self presentViewController:viewer animated:YES completion:nil];
 }
 

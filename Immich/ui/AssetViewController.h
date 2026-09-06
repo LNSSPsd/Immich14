@@ -7,6 +7,9 @@ NS_ASSUME_NONNULL_BEGIN
 @interface AssetViewController : UIViewController
 
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets startIndex:(NSInteger)startIndex;
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                         readOnly:(BOOL)readOnly;
 
 @property (nonatomic, weak, nullable) id<IMZoomTransitionSource> zoomSource;
 
