@@ -891,7 +891,7 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 	[IMPrefs.shared reloadFromPersistence];
 	[IMSession.shared reloadFromPersistence];
 	[IMBackupQueue.shared reloadFromPersistence];
-	if (!IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) {
+	if (gDaemonStopRequested || !IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) {
 		return;
 	}
 	dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
