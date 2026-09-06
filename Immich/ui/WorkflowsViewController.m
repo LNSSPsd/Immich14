@@ -602,10 +602,10 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 			field.autocorrectionType = UITextAutocorrectionTypeNo;
 			field.accessibilityLabel = key;
 			id enumeration = fieldSchema[@"enum"];
-			if ([enumeration isKindOfClass:[NSArray class]] && enumeration.count > 0) {
+			if ([enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0) {
 				NSMutableArray<NSString *> *choices = [NSMutableArray array];
 				for (id choice in enumeration) if ([choice isKindOfClass:[NSString class]]) [choices addObject:choice];
-				if (choices.count == enumeration.count) field.placeholder = [NSString stringWithFormat:_(@"%@ (%@)"), key, [choices componentsJoinedByString:@", "]];
+				if (choices.count == [enumeration count]) field.placeholder = [NSString stringWithFormat:_(@"%@ (%@)"), key, [choices componentsJoinedByString:@", "]];
 			}
 		}];
 	}
