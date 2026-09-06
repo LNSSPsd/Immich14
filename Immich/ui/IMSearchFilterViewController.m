@@ -183,6 +183,13 @@
 @property (nonatomic, strong) UISwitch *motionSwitch;
 @property (nonatomic, strong) UISwitch *offlineSwitch;
 @property (nonatomic, strong) UISwitch *withStackedSwitch;
+@property (nonatomic, strong) UITextField *originalFileNameField;
+@property (nonatomic, strong) UITextField *cityField;
+@property (nonatomic, strong) UITextField *stateField;
+@property (nonatomic, strong) UITextField *countryField;
+@property (nonatomic, strong) UITextField *makeField;
+@property (nonatomic, strong) UITextField *modelField;
+@property (nonatomic, strong) UITextField *lensModelField;
 @property (nonatomic, strong) UIButton *albumButton;
 @property (nonatomic, copy) NSArray<IMAlbum *> *albums;
 @property (nonatomic, strong) NSMutableSet<NSString *> *selectedAlbumIds;
@@ -201,6 +208,11 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
 	formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
 	return [formatter stringFromDate:date];
+}
+
+static NSString *IMSearchFilterTrimmedText(UITextField *field) {
+	NSString *value = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	return value.length > 0 ? value : nil;
 }
 
 @implementation IMSearchFilterViewController
@@ -292,6 +304,30 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	[stack addArrangedSubview:self.beforePicker];
 	[self.beforeSwitch addTarget:self action:@selector(dateSwitchChanged:) forControlEvents:UIControlEventValueChanged];
 
+	[stack addArrangedSubview:[self labelWithText:_(@"Metadata text")]];
+	[stack addArrangedSubview:[self labelWithText:_(@"Original filename")]];
+	self.originalFileNameField = [self textFieldWithPlaceholder:_(@"Filter by original filename")
+	                                             accessibilityLabel:_(@"Original filename")];
+	[stack addArrangedSubview:self.originalFileNameField];
+	[stack addArrangedSubview:[self labelWithText:_(@"City")]];
+	self.cityField = [self textFieldWithPlaceholder:_(@"Filter by city") accessibilityLabel:_(@"City")];
+	[stack addArrangedSubview:self.cityField];
+	[stack addArrangedSubview:[self labelWithText:_(@"State or province")]];
+	self.stateField = [self textFieldWithPlaceholder:_(@"Filter by state or province") accessibilityLabel:_(@"State or province")];
+	[stack addArrangedSubview:self.stateField];
+	[stack addArrangedSubview:[self labelWithText:_(@"Country")]];
+	self.countryField = [self textFieldWithPlaceholder:_(@"Filter by country") accessibilityLabel:_(@"Country")];
+	[stack addArrangedSubview:self.countryField];
+	[stack addArrangedSubview:[self labelWithText:_(@"Camera make")]];
+	self.makeField = [self textFieldWithPlaceholder:_(@"Filter by camera make") accessibilityLabel:_(@"Camera make")];
+	[stack addArrangedSubview:self.makeField];
+	[stack addArrangedSubview:[self labelWithText:_(@"Camera model")]];
+	self.modelField = [self textFieldWithPlaceholder:_(@"Filter by camera model") accessibilityLabel:_(@"Camera model")];
+	[stack addArrangedSubview:self.modelField];
+	[stack addArrangedSubview:[self labelWithText:_(@"Lens model")]];
+	self.lensModelField = [self textFieldWithPlaceholder:_(@"Filter by lens model") accessibilityLabel:_(@"Lens model")];
+	[stack addArrangedSubview:self.lensModelField];
+
 	self.favoriteSwitch = [[UISwitch alloc] init];
 	self.favoriteSwitch.accessibilityLabel = _(@"Favorites only");
 	[stack addArrangedSubview:[self rowWithTitle:_(@"Favorites only") control:self.favoriteSwitch]];
@@ -358,6 +394,20 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
 	label.adjustsFontForContentSizeCategory = YES;
 	return label;
+}
+
+- (UITextField *)textFieldWithPlaceholder:(NSString *)placeholder accessibilityLabel:(NSString *)accessibilityLabel {
+	UITextField *field = [[UITextField alloc] init];
+	field.placeholder = placeholder;
+	field.accessibilityLabel = accessibilityLabel;
+	field.borderStyle = UITextBorderStyleRoundedRect;
+	field.clearButtonMode = UITextFieldViewModeWhileEditing;
+	field.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+	field.adjustsFontForContentSizeCategory = YES;
+	field.returnKeyType = UIReturnKeyNext;
+	field.translatesAutoresizingMaskIntoConstraints = NO;
+	[field.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+	return field;
 }
 
 - (UIView *)rowWithTitle:(NSString *)title control:(UIControl *)control {
@@ -588,6 +638,20 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	if (self.motionSwitch.isOn) criteria[@"isMotion"] = @YES;
 	if (self.offlineSwitch.isOn) criteria[@"isOffline"] = @YES;
 	if (self.withStackedSwitch.isOn) criteria[@"withStacked"] = @YES;
+	NSString *originalFileName = IMSearchFilterTrimmedText(self.originalFileNameField);
+	if (originalFileName) criteria[@"originalFileName"] = originalFileName;
+	NSString *city = IMSearchFilterTrimmedText(self.cityField);
+	if (city) criteria[@"city"] = city;
+	NSString *state = IMSearchFilterTrimmedText(self.stateField);
+	if (state) criteria[@"state"] = state;
+	NSString *country = IMSearchFilterTrimmedText(self.countryField);
+	if (country) criteria[@"country"] = country;
+	NSString *make = IMSearchFilterTrimmedText(self.makeField);
+	if (make) criteria[@"make"] = make;
+	NSString *model = IMSearchFilterTrimmedText(self.modelField);
+	if (model) criteria[@"model"] = model;
+	NSString *lensModel = IMSearchFilterTrimmedText(self.lensModelField);
+	if (lensModel) criteria[@"lensModel"] = lensModel;
 	if (self.selectedAlbumIds.count > 0) {
 		criteria[@"albumIds"] = [[self.selectedAlbumIds allObjects] sortedArrayUsingSelector:@selector(compare:)];
 	}
