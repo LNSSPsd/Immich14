@@ -429,12 +429,17 @@ typedef NS_ENUM(NSInteger, IMApiErrorCode) {
 		    }
 		    NSInteger status = [(NSHTTPURLResponse *)response statusCode];
 		    if (status < 200 || status >= 300) {
+			    id json = nil;
+			    if (data.length > 0 && data.length <= 64 * 1024) {
+				    json = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+			    }
+			    NSString *message = [self errorMessageFromJSON:json] ?: [NSHTTPURLResponse localizedStringForStatusCode:status];
 			    NSError *serverError = [NSError errorWithDomain:IMApiErrorDomain
 			                                                code:IMApiErrorServer
 			                                            userInfo:@{
-				                                            NSLocalizedDescriptionKey: [NSHTTPURLResponse localizedStringForStatusCode:status],
+				                                            NSLocalizedDescriptionKey: message ?: _(@"The server rejected the media request."),
 				                                            IMApiErrorStatusCodeKey: @(status),
-			                                            }];
+				                                            }];
 			    dispatch_async(dispatch_get_main_queue(), ^{
 				    completion(nil, serverError);
 			    });
