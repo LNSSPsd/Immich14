@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface PartnerTimelineViewController : UIViewController
 
 + (instancetype)viewControllerWithPartner:(IMPartner *)partner;
++ (instancetype)aggregateViewController;
 - (instancetype)initWithPartner:(IMPartner *)partner NS_DESIGNATED_INITIALIZER;
 
 @end

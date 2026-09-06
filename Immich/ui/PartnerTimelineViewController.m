@@ -2,6 +2,7 @@
 #import "IMAssetApi.h"
 #import "TimelineCell.h"
 #import "AssetViewController.h"
+#import "IMSession.h"
 #import "common.h"
 
 static const CGFloat kPartnerCellSpacing = 2.0;
@@ -19,6 +20,7 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 
 @interface PartnerTimelineViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property (nonatomic, strong) IMPartner *partner;
+@property (nonatomic) BOOL aggregate;
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -34,6 +36,12 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 
 + (instancetype)viewControllerWithPartner:(IMPartner *)partner {
 	return [[self alloc] initWithPartner:partner];
+}
+
++ (instancetype)aggregateViewController {
+	PartnerTimelineViewController *vc = [[self alloc] initWithPartner:[[IMPartner alloc] init]];
+	vc.aggregate = YES;
+	return vc;
 }
 
 - (instancetype)initWithPartner:(IMPartner *)partner {
@@ -59,7 +67,7 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	NSString *name = self.partner.name.length ? self.partner.name : self.partner.email;
-	self.title = name.length ? name : _(@"Partner Photos");
+	self.title = self.aggregate ? _(@"Shared Partner Photos") : (name.length ? name : _(@"Partner Photos"));
 	if (self.partner.email.length && ![self.partner.email isEqualToString:name]) self.navigationItem.prompt = self.partner.email;
 	if (@available(iOS 13.0, *)) self.view.backgroundColor = UIColor.systemBackgroundColor;
 	else self.view.backgroundColor = UIColor.whiteColor;
@@ -112,8 +120,10 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 		[self.refreshControl endRefreshing];
 		return;
 	}
-	if (!IMPartnerTimelineUUIDv4(self.partner.partnerId)) {
+	NSString *userId = self.aggregate ? IMSession.shared.userId : self.partner.partnerId;
+	if (!IMPartnerTimelineUUIDv4(userId)) {
 		self.emptyLabel.text = _(@"This partner has an invalid user identifier.");
+		if (self.aggregate) self.emptyLabel.text = _(@"Sign in again to browse shared photos.");
 		self.emptyLabel.hidden = NO;
 		[self.refreshControl endRefreshing];
 		return;
@@ -129,7 +139,7 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 	[self.collectionView reloadData];
 	[self.refreshControl beginRefreshing];
 	__weak typeof(self) weakSelf = self;
-	[IMAssetApi timeBucketsForUserId:self.partner.partnerId withPartners:NO completion:^(NSArray<NSString *> *dates, NSArray<NSNumber *> *counts, NSError *error) {
+	[IMAssetApi timeBucketsForUserId:userId withPartners:self.aggregate completion:^(NSArray<NSString *> *dates, NSArray<NSNumber *> *counts, NSError *error) {
 		PartnerTimelineViewController *strongSelf = weakSelf;
 		if (!strongSelf || generation != strongSelf.generation) return;
 		strongSelf.loadingBucketsList = NO;
@@ -165,11 +175,12 @@ static BOOL IMPartnerTimelineUUIDv4(NSString *value) {
 }
 
 - (void)loadBucketIfNeeded:(NSString *)bucket {
-	if (bucket.length == 0 || self.bucketAssets[bucket] || [self.loadingBuckets containsObject:bucket] || !IMPartnerTimelineUUIDv4(self.partner.partnerId)) return;
+	NSString *userId = self.aggregate ? IMSession.shared.userId : self.partner.partnerId;
+	if (bucket.length == 0 || self.bucketAssets[bucket] || [self.loadingBuckets containsObject:bucket] || !IMPartnerTimelineUUIDv4(userId)) return;
 	[self.loadingBuckets addObject:bucket];
 	NSUInteger generation = self.generation;
 	__weak typeof(self) weakSelf = self;
-	[IMAssetApi assetsInTimeBucket:bucket forUserId:self.partner.partnerId withPartners:NO completion:^(NSArray<IMAsset *> *assets, NSError *error) {
+	[IMAssetApi assetsInTimeBucket:bucket forUserId:userId withPartners:self.aggregate completion:^(NSArray<IMAsset *> *assets, NSError *error) {
 		PartnerTimelineViewController *strongSelf = weakSelf;
 		if (!strongSelf || generation != strongSelf.generation) return;
 		[strongSelf.loadingBuckets removeObject:bucket];

@@ -64,9 +64,18 @@
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
 	                                                                                        target:self
 	                                                                                        action:@selector(addPartner)];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Shared Photos")
+	                                                                            style:UIBarButtonItemStylePlain
+	                                                                           target:self
+	                                                                           action:@selector(browseAllSharedPhotos)];
 	self.refreshControl = [[UIRefreshControl alloc] init];
 	[self.refreshControl addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
 	[self reload];
+}
+
+- (void)browseAllSharedPhotos {
+	if (self.loading || self.mutating) return;
+	[self.navigationController pushViewController:[PartnerTimelineViewController aggregateViewController] animated:YES];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
