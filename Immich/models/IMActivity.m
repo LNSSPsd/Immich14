@@ -5,6 +5,45 @@ static id IMActivityValueOrNil(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
 }
 
+static BOOL IMActivityUUIDv4(id value) {
+	if (![value isKindOfClass:[NSString class]] || [(NSString *)value length] != 36) {
+		return NO;
+	}
+	NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:(NSString *)value];
+	if (!uuid) {
+		return NO;
+	}
+	NSString *canonical = uuid.UUIDString.lowercaseString;
+	return canonical.length == 36 && [canonical characterAtIndex:14] == '4' &&
+	       ([canonical characterAtIndex:19] == '8' || [canonical characterAtIndex:19] == '9' ||
+	        [canonical characterAtIndex:19] == 'a' || [canonical characterAtIndex:19] == 'b');
+}
+
+static BOOL IMActivityUserIsValid(NSDictionary *user) {
+	if (![user isKindOfClass:[NSDictionary class]]) {
+		return NO;
+	}
+	NSArray<NSString *> *requiredKeys = @[
+		@"avatarColor", @"email", @"id", @"name", @"profileChangedAt", @"profileImagePath"
+	];
+	for (NSString *key in requiredKeys) {
+		if (user[key] == nil || user[key] == [NSNull null]) {
+			return NO;
+		}
+	}
+	if (!IMActivityUUIDv4(user[@"id"]) ||
+	    ![user[@"name"] isKindOfClass:[NSString class]] ||
+	    ![user[@"email"] isKindOfClass:[NSString class]] ||
+	    ![user[@"profileImagePath"] isKindOfClass:[NSString class]] ||
+	    ![user[@"profileChangedAt"] isKindOfClass:[NSString class]] ||
+	    !IMDateFromServerTimestamp(user[@"profileChangedAt"]) ||
+	    ![@[ @"primary", @"pink", @"red", @"yellow", @"blue", @"green", @"purple", @"orange", @"gray", @"amber" ]
+	      containsObject:user[@"avatarColor"]]) {
+		return NO;
+	}
+	return YES;
+}
+
 @interface IMActivity ()
 @property (nonatomic, copy) NSString *activityId;
 @property (nonatomic, copy, nullable) NSString *assetId;
@@ -20,30 +59,46 @@ static id IMActivityValueOrNil(id value) {
 	if (![dictionary isKindOfClass:[NSDictionary class]]) {
 		return nil;
 	}
+	if (dictionary[@"id"] == nil || dictionary[@"assetId"] == nil ||
+	    dictionary[@"createdAt"] == nil || dictionary[@"type"] == nil ||
+	    dictionary[@"user"] == nil) {
+		return nil;
+	}
 	id value = IMActivityValueOrNil(dictionary[@"id"]);
-	if (![value isKindOfClass:[NSString class]] || [(NSString *)value length] == 0) {
+	if (!IMActivityUUIDv4(value)) {
 		return nil;
 	}
 	id userValue = IMActivityValueOrNil(dictionary[@"user"]);
-	if (![userValue isKindOfClass:[NSDictionary class]]) {
+	if (!IMActivityUserIsValid(userValue)) {
 		return nil;
 	}
 	IMUser *user = [[IMUser alloc] initWithDictionary:userValue];
-	if (user.userId.length == 0) {
-		return nil;
-	}
 	IMActivity *activity = [[IMActivity alloc] init];
 	activity.activityId = value;
 	value = IMActivityValueOrNil(dictionary[@"assetId"]);
-	activity.assetId = [value isKindOfClass:[NSString class]] ? value : nil;
+	if (value != nil && !IMActivityUUIDv4(value)) {
+		return nil;
+	}
+	activity.assetId = [value isKindOfClass:[NSString class]] ? [value copy] : nil;
 	value = IMActivityValueOrNil(dictionary[@"type"]);
-	activity.type = [value isKindOfClass:[NSString class]] ? value : @"comment";
+	if (![value isKindOfClass:[NSString class]] ||
+	    !([value isEqualToString:@"comment"] || [value isEqualToString:@"like"])) {
+		return nil;
+	}
+	activity.type = [value copy];
 	value = IMActivityValueOrNil(dictionary[@"comment"]);
-	activity.comment = [value isKindOfClass:[NSString class]] ? value : nil;
+	if (value != nil && ![value isKindOfClass:[NSString class]]) {
+		return nil;
+	}
+	activity.comment = [value isKindOfClass:[NSString class]] ? [value copy] : nil;
 	value = IMActivityValueOrNil(dictionary[@"createdAt"]);
-	activity.createdAt = [value isKindOfClass:[NSString class]]
-	    ? (IMDateFromServerTimestamp(value) ?: [NSDate date])
-	    : [NSDate date];
+	if (![value isKindOfClass:[NSString class]]) {
+		return nil;
+	}
+	activity.createdAt = IMDateFromServerTimestamp(value);
+	if (!activity.createdAt) {
+		return nil;
+	}
 	activity.user = user;
 	return activity;
 }
