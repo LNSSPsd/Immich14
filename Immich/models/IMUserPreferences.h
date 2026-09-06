@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL gCastEnabled;
 @property (nonatomic, readonly) NSInteger archiveSize;
 @property (nonatomic, readonly) BOOL includeEmbeddedVideos;
+@property (nonatomic, readonly) BOOL showSupportBadge;
 @property (nonatomic, readonly) BOOL memoriesEnabled;
 @property (nonatomic, readonly) NSInteger memoriesDuration;
 @property (nonatomic, readonly) BOOL peopleEnabled;

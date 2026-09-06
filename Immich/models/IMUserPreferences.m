@@ -28,6 +28,7 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 @property (nonatomic, readwrite) BOOL gCastEnabled;
 @property (nonatomic, readwrite) NSInteger archiveSize;
 @property (nonatomic, readwrite) BOOL includeEmbeddedVideos;
+@property (nonatomic, readwrite) BOOL showSupportBadge;
 @property (nonatomic, readwrite) BOOL memoriesEnabled;
 @property (nonatomic, readwrite) NSInteger memoriesDuration;
 @property (nonatomic, readwrite) BOOL peopleEnabled;
@@ -59,6 +60,8 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 		NSDictionary *download = IMPreferencesSection(_rawDictionary, @"download");
 		_archiveSize = MAX(0, IMPreferencesInteger(download, @"archiveSize", 0));
 		_includeEmbeddedVideos = IMPreferencesBool(download, @"includeEmbeddedVideos", NO);
+		NSDictionary *purchase = IMPreferencesSection(_rawDictionary, @"purchase");
+		_showSupportBadge = IMPreferencesBool(purchase, @"showSupportBadge", YES);
 
 		NSDictionary *memories = IMPreferencesSection(_rawDictionary, @"memories");
 		_memoriesEnabled = IMPreferencesBool(memories, @"enabled", YES);

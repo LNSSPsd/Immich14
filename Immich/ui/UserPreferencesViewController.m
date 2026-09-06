@@ -7,6 +7,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferencesSection) {
 	IMUserPreferencesSectionEmail = 0,
 	IMUserPreferencesSectionFeatures,
 	IMUserPreferencesSectionDownloads,
+	IMUserPreferencesSectionPurchase,
 	IMUserPreferencesSectionDefaults,
 	IMUserPreferencesSectionWebSidebar,
 	IMUserPreferencesSectionCount,
@@ -18,6 +19,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 	IMUserPreferenceToggleAlbumUpdate,
 	IMUserPreferenceToggleCast,
 	IMUserPreferenceToggleEmbeddedVideos,
+	IMUserPreferenceToggleSupportBadge,
 	IMUserPreferenceToggleMemories,
 	IMUserPreferenceTogglePeople,
 	IMUserPreferenceToggleSharedLinks,
@@ -159,6 +161,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 		case IMUserPreferencesSectionEmail: return 3;
 		case IMUserPreferencesSectionFeatures: return 6;
 		case IMUserPreferencesSectionDownloads: return 3;
+		case IMUserPreferencesSectionPurchase: return 1;
 		case IMUserPreferencesSectionDefaults: return 3;
 		case IMUserPreferencesSectionWebSidebar: return 5;
 		default: return 0;
@@ -170,6 +173,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 		case IMUserPreferencesSectionEmail: return _(@"Email notifications");
 		case IMUserPreferencesSectionFeatures: return _(@"Library features");
 		case IMUserPreferencesSectionDownloads: return _(@"Playback and downloads");
+		case IMUserPreferencesSectionPurchase: return _(@"Purchase");
 		case IMUserPreferencesSectionDefaults: return _(@"Defaults");
 		case IMUserPreferencesSectionWebSidebar: return _(@"Web sidebar");
 		default: return nil;
@@ -179,6 +183,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if (section == IMUserPreferencesSectionEmail) return _(@"Email delivery also depends on the server SMTP configuration.");
 	if (section == IMUserPreferencesSectionDownloads) return _(@"Download archive limits and embedded-video behavior are controlled by the server.");
+	if (section == IMUserPreferencesSectionPurchase) return _(@"The support badge is shown in the Immich interface when enabled.");
 	if (section == IMUserPreferencesSectionWebSidebar) return _(@"These switches affect the Immich web sidebar for your account.");
 	return nil;
 }
@@ -212,6 +217,8 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 				case 1: return [self switchCell:_(@"Embedded videos") detail:_(@"Include embedded videos in downloads.") on:p.includeEmbeddedVideos tag:IMUserPreferenceToggleEmbeddedVideos enabled:YES];
 				default: return [self valueCell:_(@"Download archive size") detail:p.archiveSize > 0 ? [NSString stringWithFormat:_(@"%ld bytes"), (long)p.archiveSize] : _(@"Server default")];
 			}
+		case IMUserPreferencesSectionPurchase:
+			return [self switchCell:_(@"Support badge") detail:_(@"Show the Immich support badge.") on:p.showSupportBadge tag:IMUserPreferenceToggleSupportBadge enabled:YES];
 		case IMUserPreferencesSectionDefaults:
 			if (indexPath.row == 0) return [self valueCell:_(@"Album photo order") detail:[p.defaultAlbumAssetOrder isEqualToString:@"asc"] ? _(@"Oldest first") : _(@"Newest first")];
 			if (indexPath.row == 1) return [self valueCell:_(@"Memory duration") detail:[NSString stringWithFormat:_(@"%ld seconds"), (long)p.memoriesDuration]];
@@ -238,6 +245,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 		case IMUserPreferenceToggleAlbumUpdate: section = @"emailNotifications"; key = @"albumUpdate"; break;
 		case IMUserPreferenceToggleCast: section = @"cast"; key = @"gCastEnabled"; break;
 		case IMUserPreferenceToggleEmbeddedVideos: section = @"download"; key = @"includeEmbeddedVideos"; break;
+		case IMUserPreferenceToggleSupportBadge: section = @"purchase"; key = @"showSupportBadge"; break;
 		case IMUserPreferenceToggleMemories: section = @"memories"; key = @"enabled"; break;
 		case IMUserPreferenceTogglePeople: section = @"people"; key = @"enabled"; break;
 		case IMUserPreferenceToggleSharedLinks: section = @"sharedLinks"; key = @"enabled"; break;
