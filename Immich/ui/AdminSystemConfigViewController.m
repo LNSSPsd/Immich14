@@ -1,6 +1,7 @@
 #import "AdminSystemConfigViewController.h"
 #import "IMSystemConfigApi.h"
 #import "IMSystemConfig.h"
+#import "IMSystemConfigStorageTemplateOptions.h"
 #import "IMApiClient.h"
 #import "common.h"
 
@@ -31,6 +32,8 @@ typedef NS_ENUM(NSInteger, IMSystemConfigToggle) {
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic) BOOL loading;
 @property (nonatomic) BOOL mutating;
+@property (nonatomic, strong, nullable) IMSystemConfigStorageTemplateOptions *storageTemplateOptions;
+@property (nonatomic) BOOL loadingStorageTemplateOptions;
 @end
 
 @implementation AdminSystemConfigViewController
@@ -233,6 +236,100 @@ typedef NS_ENUM(NSInteger, IMSystemConfigToggle) {
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)presentStorageTemplateEditor {
+	if (self.loading || self.mutating || self.loadingStorageTemplateOptions || !self.config) return;
+	if (self.storageTemplateOptions) {
+		[self presentStorageTemplateSheet];
+		return;
+	}
+	self.loadingStorageTemplateOptions = YES;
+	__weak typeof(self) weakSelf = self;
+	[IMSystemConfigApi storageTemplateOptionsWithCompletion:^(IMSystemConfigStorageTemplateOptions *options, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			AdminSystemConfigViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.loadingStorageTemplateOptions = NO;
+			if (error || !options) {
+				NSInteger status = [IMApiClient HTTPStatusForError:error];
+				if ((status == 404 || status == 405) && strongSelf.config) {
+					strongSelf.storageTemplateOptions = nil;
+					[strongSelf promptForCustomStorageTemplate];
+					return;
+				}
+				[strongSelf showError:error ?: [NSError errorWithDomain:IMApiErrorDomain
+				                                                   code:2
+				                                               userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned invalid storage-template options.")}]];
+				return;
+			}
+			strongSelf.storageTemplateOptions = options;
+			[strongSelf presentStorageTemplateSheet];
+		});
+	}];
+}
+
+- (void)presentStorageTemplateSheet {
+	if (!self.config || self.mutating) return;
+	IMSystemConfigStorageTemplateOptions *options = self.storageTemplateOptions;
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Storage template")
+	                                                                 message:_(@"Choose a server preset or enter a custom template.")
+	                                                          preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	for (NSString *preset in options.presetOptions) {
+		if (![preset isKindOfClass:[NSString class]] || preset.length == 0) continue;
+		[sheet addAction:[UIAlertAction actionWithTitle:preset
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+			[weakSelf saveStorageTemplate:preset];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Custom template")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		[weakSelf promptForCustomStorageTemplate];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	NSIndexPath *path = [NSIndexPath indexPathForRow:2 inSection:IMSystemConfigSectionStorage];
+	UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:path];
+	if (sheet.popoverPresentationController) {
+		sheet.popoverPresentationController.sourceView = cell ?: self.view;
+		sheet.popoverPresentationController.sourceRect = cell ? cell.bounds : self.view.bounds;
+	}
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)promptForCustomStorageTemplate {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Custom storage template")
+	                                                                 message:_(@"Use the tokens supplied by the Immich server. The server validates the template before saving.")
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.text = self.config.storageTemplate ?: @"";
+		field.placeholder = _(@"Template, for example {{y}}/{{filename}}");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+		field.keyboardType = UIKeyboardTypeASCIICapable;
+	}];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AdminSystemConfigViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *template = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		if (template.length == 0 || [template rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) {
+			[strongSelf showError:[NSError errorWithDomain:IMApiErrorDomain
+			                                             code:1
+			                                         userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a storage template without control characters.")}]];
+			return;
+		}
+		[strongSelf saveStorageTemplate:template];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)saveStorageTemplate:(NSString *)template {
+	if (self.mutating || template.length == 0) return;
+	[self updateSection:@"storageTemplate" values:@{ @"template": template }];
+}
+
 - (void)defaultsTapped {
 	if (self.loading || self.mutating) return;
 	self.loading = YES;
@@ -305,7 +402,12 @@ typedef NS_ENUM(NSInteger, IMSystemConfigToggle) {
 		switch (indexPath.row) {
 			case 0: return [self switchCell:_(@"Trash") detail:nil on:c.trashEnabled tag:IMSystemConfigToggleTrash];
 			case 1: return [self valueCell:_(@"Trash retention") detail:[NSString stringWithFormat:_(@"%ld days"), (long)c.trashDays] disclosure:YES];
-			case 2: return [self switchCell:_(@"Storage template") detail:c.storageTemplate.length ? c.storageTemplate : nil on:c.storageTemplateEnabled tag:IMSystemConfigToggleStorageTemplate];
+			case 2: {
+				UITableViewCell *cell = [self switchCell:_(@"Storage template") detail:c.storageTemplate.length ? c.storageTemplate : _(@"Not configured") on:c.storageTemplateEnabled tag:IMSystemConfigToggleStorageTemplate];
+				cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+				cell.accessibilityHint = _(@"Tap to choose a preset or edit the template. Use the switch to enable or disable it.");
+				return cell;
+			}
 			default: return [self switchCell:_(@"Verify storage hashes") detail:nil on:c.storageHashVerificationEnabled tag:IMSystemConfigToggleStorageHash];
 		}
 	}
@@ -324,6 +426,8 @@ typedef NS_ENUM(NSInteger, IMSystemConfigToggle) {
 	if (!self.config || self.mutating) return;
 	if (indexPath.section == IMSystemConfigSectionStorage && indexPath.row == 1) {
 		[self promptForTrashDays];
+	} else if (indexPath.section == IMSystemConfigSectionStorage && indexPath.row == 2) {
+		[self presentStorageTemplateEditor];
 	} else if (indexPath.section == IMSystemConfigSectionServer && indexPath.row == 0) {
 		[self promptForTextSection:@"server" key:@"externalDomain" title:_(@"External domain") current:self.config.externalDomain];
 	} else if (indexPath.section == IMSystemConfigSectionServer && indexPath.row == 1) {
