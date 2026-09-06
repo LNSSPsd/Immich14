@@ -6,16 +6,18 @@
 #import "IMPluginApi.h"
 #import "PluginsViewController.h"
 #import "common.h"
+#import <CoreFoundation/CoreFoundation.h>
 #include <math.h>
-#include <string.h>
 
 static NSString *const IMWorkflowAssetCreateTrigger = @"AssetCreate";
 static NSString *const IMWorkflowMetadataTrigger = @"AssetMetadataExtraction";
 
+static BOOL IMWorkflowSchemaBoolean(id value) {
+	return [value isKindOfClass:[NSNumber class]] && CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID();
+}
+
 static BOOL IMWorkflowSchemaNumber(id value) {
-	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	return type && strcmp(type, @encode(BOOL)) != 0 && strcmp(type, @encode(bool)) != 0;
+	return [value isKindOfClass:[NSNumber class]] && !IMWorkflowSchemaBoolean(value) && isfinite([(NSNumber *)value doubleValue]);
 }
 
 static BOOL IMWorkflowSchemaValidateValue(id value,
@@ -28,7 +30,7 @@ static BOOL IMWorkflowSchemaValidateValue(id value,
 		return NO;
 	}
 
-	BOOL isArray = [schema[@"array"] isKindOfClass:[NSNumber class]] && [schema[@"array"] boolValue];
+	BOOL isArray = IMWorkflowSchemaBoolean(schema[@"array"]) && [schema[@"array"] boolValue];
 	if (isArray) {
 		if (![value isKindOfClass:[NSArray class]]) {
 			if (message) *message = [NSString stringWithFormat:_(@"%@ must be an array."), path];
@@ -45,13 +47,12 @@ static BOOL IMWorkflowSchemaValidateValue(id value,
 		return YES;
 	}
 
-	NSString *type = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : nil;
+	NSString *type = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : @"object";
 	NSDictionary *properties = [schema[@"properties"] isKindOfClass:[NSDictionary class]] ? schema[@"properties"] : nil;
-	if (!type.length && properties) type = @"object";
 	BOOL valid = YES;
 	if ([type isEqualToString:@"object"]) {
 		if (![value isKindOfClass:[NSDictionary class]]) valid = NO;
-		if (valid && properties) {
+		if (valid) {
 			id required = schema[@"required"];
 			if ([required isKindOfClass:[NSArray class]]) {
 				for (id requiredKey in (NSArray *)required) {
@@ -65,7 +66,7 @@ static BOOL IMWorkflowSchemaValidateValue(id value,
 			}
 			for (NSString *key in properties) {
 				id child = ((NSDictionary *)value)[key];
-				if (child == nil || [child isKindOfClass:[NSNull class]]) continue;
+				if (child == nil) continue;
 				NSDictionary *childSchema = [properties[key] isKindOfClass:[NSDictionary class]] ? properties[key] : nil;
 				if (!childSchema) continue;
 				if (!IMWorkflowSchemaValidateValue(child, childSchema, [path stringByAppendingPathComponent:key], message)) return NO;
@@ -78,8 +79,7 @@ static BOOL IMWorkflowSchemaValidateValue(id value,
 	} else if ([type isEqualToString:@"integer"]) {
 		valid = IMWorkflowSchemaNumber(value) && floor([(NSNumber *)value doubleValue]) == [(NSNumber *)value doubleValue];
 	} else if ([type isEqualToString:@"boolean"]) {
-		valid = [value isKindOfClass:[NSNumber class]] &&
-		        (strcmp([(NSNumber *)value objCType], @encode(BOOL)) == 0 || strcmp([(NSNumber *)value objCType], @encode(bool)) == 0);
+		valid = IMWorkflowSchemaBoolean(value);
 	}
 	if (!valid) {
 		if (message) *message = [NSString stringWithFormat:_(@"%@ has the wrong type."), path];
@@ -87,19 +87,25 @@ static BOOL IMWorkflowSchemaValidateValue(id value,
 	}
 
 	id enumeration = schema[@"enum"];
-	if ([enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0 && ![(NSArray *)enumeration containsObject:value]) {
-		if (message) *message = [NSString stringWithFormat:_(@"%@ must be one of %@."), path, [(NSArray *)enumeration componentsJoinedByString:@", "]];
-		return NO;
+	if ([type isEqualToString:@"string"] && [enumeration isKindOfClass:[NSArray class]]) {
+		BOOL stringChoices = YES;
+		for (id choice in (NSArray *)enumeration) {
+			if (![choice isKindOfClass:[NSString class]]) { stringChoices = NO; break; }
+		}
+		if (stringChoices && [enumeration count] > 0 && ![(NSArray *)enumeration containsObject:value]) {
+			if (message) *message = [NSString stringWithFormat:_(@"%@ must be one of %@."), path, [(NSArray *)enumeration componentsJoinedByString:@", "]];
+			return NO;
+		}
 	}
 	if (IMWorkflowSchemaNumber(value)) {
 		double number = [(NSNumber *)value doubleValue];
 		id minimum = schema[@"minimum"];
 		id maximum = schema[@"maximum"];
-		if ([minimum isKindOfClass:[NSNumber class]] && number < [minimum doubleValue]) {
+		if (IMWorkflowSchemaNumber(minimum) && number < [minimum doubleValue]) {
 			if (message) *message = [NSString stringWithFormat:_(@"%@ must be at least %@."), path, minimum];
 			return NO;
 		}
-		if ([maximum isKindOfClass:[NSNumber class]] && number > [maximum doubleValue]) {
+		if (IMWorkflowSchemaNumber(maximum) && number > [maximum doubleValue]) {
 			if (message) *message = [NSString stringWithFormat:_(@"%@ must be at most %@."), path, maximum];
 			return NO;
 		}
