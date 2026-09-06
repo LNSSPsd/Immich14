@@ -71,7 +71,33 @@
 }
 
 - (void)createTag {
+	if (!self.tags.count) {
+		[self presentCreateTagWithParent:nil];
+		return;
+	}
+	UIAlertController *picker = [UIAlertController alertControllerWithTitle:_(@"Parent tag") message:_(@"Choose an optional parent for the new tag.") preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	[picker addAction:[UIAlertAction actionWithTitle:_(@"No parent") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		[weakSelf presentCreateTagWithParent:nil];
+	}]];
+	for (IMTag *tag in self.tags) {
+		if (!tag.tagId.length) continue;
+		NSString *title = tag.value.length ? tag.value : tag.name;
+		if (!title.length) continue;
+		[picker addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			[weakSelf presentCreateTagWithParent:tag];
+		}]];
+	}
+	[picker addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+		picker.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
+	}
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)presentCreateTagWithParent:(IMTag *)parent {
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Create Tag") message:nil preferredStyle:UIAlertControllerStyleAlert];
+	if (parent.value.length) alert.message = [NSString stringWithFormat:_(@"Parent: %@"), parent.value];
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Tag name"); field.autocapitalizationType = UITextAutocapitalizationTypeWords; }];
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = _(@"Color (optional, e.g. #5AC8FA)"); field.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters; }];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
@@ -80,7 +106,7 @@
 		NSString *name = [alert.textFields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 		NSString *color = [alert.textFields[1].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 		if (!name.length) return;
-		[IMTagApi createTagNamed:name color:color.length ? color : nil completion:^(IMTag *tag, NSError *error) {
+		[IMTagApi createTagNamed:name color:color.length ? color : nil parentId:parent.tagId completion:^(IMTag *tag, NSError *error) {
 			if (error || !tag) { dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showError:error]; }); return; }
 			[weakSelf reloadTags];
 		}];

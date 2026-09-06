@@ -54,8 +54,12 @@ static BOOL IMTagIdentifierArrayIsValid(NSArray<NSString *> *values) {
 	}];
 }
 + (void)createTagNamed:(NSString *)name color:(NSString *)color completion:(void (^)(IMTag *, NSError *))completion {
+	[self createTagNamed:name color:color parentId:nil completion:completion];
+}
++ (void)createTagNamed:(NSString *)name color:(NSString *)color parentId:(NSString *)parentId completion:(void (^)(IMTag *, NSError *))completion {
 	NSMutableDictionary *body = [@{ @"name": name ?: @"" } mutableCopy];
 	if (color.length) body[@"color"] = color;
+	if (parentId.length) body[@"parentId"] = parentId;
 	[[IMApiClient shared] POST:@"/tags" body:body completion:^(id json, NSError *error) {
 		if (error) { completion(nil, error); return; }
 		if (![json isKindOfClass:[NSDictionary class]]) { completion(nil, IMTagMalformedResponse()); return; }
