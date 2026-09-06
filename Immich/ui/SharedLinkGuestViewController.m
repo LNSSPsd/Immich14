@@ -24,7 +24,7 @@ static const CGFloat kGuestSpacing = 2.0;
                 allowDownload:(BOOL)allowDownload;
 @end
 
-@interface SharedLinkGuestViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
+@interface SharedLinkGuestViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIDocumentPickerDelegate>
 @property (nonatomic, copy) NSURL *publicURL;
 @property (nonatomic, copy) NSArray<IMAsset *> *assets;
 @property (nonatomic, strong) UICollectionView *collectionView;
@@ -34,6 +34,10 @@ static const CGFloat kGuestSpacing = 2.0;
 @property (nonatomic, strong, nullable) IMSharedLink *link;
 @property (nonatomic) BOOL loading;
 @property (nonatomic) BOOL passwordPromptVisible;
+@property (nonatomic, copy) NSArray<NSURL *> *pendingUploadURLs;
+@property (nonatomic) NSUInteger uploadIndex;
+@property (nonatomic) NSUInteger uploadedCount;
+@property (nonatomic) BOOL uploadInProgress;
 @end
 
 @implementation IMGuestAssetCell
@@ -297,6 +301,7 @@ static const CGFloat kGuestSpacing = 2.0;
 }
 
 - (void)closeTapped {
+	[IMSharedLinkApi clearGuestSession];
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
 
@@ -330,7 +335,76 @@ static const CGFloat kGuestSpacing = 2.0;
 	self.assets = link.assets ?: @[];
 	self.title = link.title.length ? link.title : _(@"Shared Link");
 	self.statusLabel.text = self.assets.count ? nil : _(@"This shared link has no photos.");
+	if (link.allowUpload) {
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+		                                                                                           target:self
+		                                                                                           action:@selector(uploadTapped)];
+	} else {
+		self.navigationItem.rightBarButtonItem = nil;
+	}
 	[self.collectionView reloadData];
+}
+
+- (void)uploadTapped {
+	if (self.uploadInProgress || !self.link.allowUpload) return;
+	UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image", @"public.movie"]
+	                                                                                                  inMode:UIDocumentPickerModeImport];
+	picker.delegate = self;
+	picker.allowsMultipleSelection = YES;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+	NSMutableArray<NSURL *> *validURLs = [NSMutableArray arrayWithCapacity:urls.count];
+	for (NSURL *url in urls) {
+		if ([url isKindOfClass:[NSURL class]] && url.isFileURL && url.path.length > 0) [validURLs addObject:url];
+	}
+	if (validURLs.count == 0) return;
+	self.pendingUploadURLs = validURLs;
+	self.uploadIndex = 0;
+	self.uploadedCount = 0;
+	self.uploadInProgress = YES;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+	[self uploadNextFile];
+}
+
+- (void)uploadNextFile {
+	if (self.uploadIndex >= self.pendingUploadURLs.count) {
+		NSUInteger uploaded = self.uploadedCount;
+		self.pendingUploadURLs = @[];
+		self.uploadInProgress = NO;
+		self.navigationItem.rightBarButtonItem.enabled = YES;
+		self.statusLabel.text = nil;
+		[self reload];
+		[self showGuestMessage:[NSString stringWithFormat:_(@"Uploaded %lu file%@."), (unsigned long)uploaded, uploaded == 1 ? @"" : _(@"s")]
+		                    title:_(@"Upload complete")];
+		return;
+	}
+	NSURL *url = self.pendingUploadURLs[self.uploadIndex];
+	self.statusLabel.text = [NSString stringWithFormat:_(@"Uploading %lu of %lu…"), (unsigned long)(self.uploadIndex + 1), (unsigned long)self.pendingUploadURLs.count];
+	__weak typeof(self) weakSelf = self;
+	[IMSharedLinkApi guestUploadFileAtURL:url publicURL:self.publicURL completion:^(BOOL duplicate, NSString *assetId, NSError *error) {
+		SharedLinkGuestViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		if (error || !assetId.length) {
+			strongSelf.uploadInProgress = NO;
+			strongSelf.pendingUploadURLs = @[];
+			strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
+			[strongSelf showGuestMessage:error.localizedDescription ?: _(@"The server rejected this shared-link upload.") title:_(@"Upload failed")];
+			return;
+		}
+		(void)duplicate;
+		strongSelf.uploadedCount += 1;
+		strongSelf.uploadIndex += 1;
+		[strongSelf uploadNextFile];
+	}];
+}
+
+- (void)showGuestMessage:(NSString *)message title:(NSString *)title {
+	if (!self.viewIfLoaded.window) return;
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showPasswordPrompt:(NSString *)message {

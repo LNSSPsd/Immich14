@@ -46,6 +46,8 @@ NS_ASSUME_NONNULL_BEGIN
                  password:(NSString *)password
                completion:(void (^)(IMSharedLink *_Nullable link, NSError *_Nullable error))completion;
 
++ (void)clearGuestSession;
+
 + (nullable NSURLSessionTask *)guestThumbnailDataForAssetId:(NSString *)assetId
                                                   publicURL:(NSURL *)publicURL
                                                        size:(NSString *)size
@@ -56,6 +58,12 @@ NS_ASSUME_NONNULL_BEGIN
                                             destinationURL:(NSURL *)destinationURL
                                                 completion:(void (^)(NSURL *_Nullable fileURL,
                                                                      NSError *_Nullable error))completion;
+
++ (void)guestUploadFileAtURL:(NSURL *)fileURL
+                    publicURL:(NSURL *)publicURL
+                    completion:(void (^)(BOOL duplicate,
+                                         NSString *_Nullable assetId,
+                                         NSError *_Nullable error))completion;
 
 @end
 

@@ -162,6 +162,31 @@ static IMApiClient *IMSharedLinkStoredGuestClient(NSError **error) {
 	return client;
 }
 
+static IMApiClient *sPublicGuestClient;
+static NSString *sPublicGuestIdentity;
+
+static IMApiClient *IMSharedLinkRetainedGuestClient(NSURL *baseURL, NSString *key, NSString *slug) {
+	if (![baseURL isKindOfClass:[NSURL class]]) return nil;
+	NSString *identity = [NSString stringWithFormat:@"%@|%@|%@", baseURL.absoluteString ?: @"", key ?: @"", slug ?: @""];
+	IMApiClient *client = nil;
+	IMApiClient *oldClient = nil;
+	@synchronized([IMSharedLinkApi class]) {
+		if (sPublicGuestClient && ![sPublicGuestIdentity isEqualToString:identity]) {
+			oldClient = sPublicGuestClient;
+			sPublicGuestClient = nil;
+			sPublicGuestIdentity = nil;
+		}
+		if (!sPublicGuestClient) {
+			sPublicGuestClient = [[IMApiClient alloc] initWithBaseURL:baseURL];
+			sPublicGuestClient.anonymous = YES;
+			sPublicGuestIdentity = [identity copy];
+		}
+		client = sPublicGuestClient;
+	}
+	[oldClient invalidate];
+	return client;
+}
+
 static BOOL IMSharedLinkUUIDv4Valid(id value) {
 	if (![value isKindOfClass:[NSString class]] || [value length] != 36) return NO;
 	NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:value];
@@ -566,10 +591,12 @@ static NSArray<NSString *> *IMSharedLinkOptionKeys(void) {
 		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, parseError); });
 		return;
 	}
-	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
-	client.anonymous = YES;
+	IMApiClient *client = IMSharedLinkRetainedGuestClient(baseURL, key, slug);
+	if (!client) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, IMSharedLinkError(_(@"The public-link session could not be created."))); });
+		return;
+	}
 	[client GET:@"/shared-links/me" queryItems:queryItems completion:^(id json, NSError *error) {
-		[client invalidate];
 		if (error) { completion(nil, error); return; }
 		if (!IMSharedLinkGuestResponseValid(json)) {
 			completion(nil, IMSharedLinkGuestMalformedError());
@@ -598,13 +625,15 @@ static NSArray<NSString *> *IMSharedLinkOptionKeys(void) {
 		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, parseError ?: IMSharedLinkError(_(@"A shared-link password is required."))); });
 		return;
 	}
-	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
-	client.anonymous = YES;
+	IMApiClient *client = IMSharedLinkRetainedGuestClient(baseURL, key, slug);
+	if (!client) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, IMSharedLinkError(_(@"The public-link session could not be created."))); });
+		return;
+	}
 	[client POST:@"/shared-links/login"
 	   queryItems:queryItems
 	         body:@{ @"password": trimmedPassword }
 	   completion:^(id json, NSError *error) {
-		[client invalidate];
 		if (error) { completion(nil, error); return; }
 		if (!IMSharedLinkGuestResponseValid(json)) {
 			completion(nil, IMSharedLinkGuestMalformedError());
@@ -613,6 +642,16 @@ static NSArray<NSString *> *IMSharedLinkOptionKeys(void) {
 		IMSharedLink *link = IMSharedLinkFromResponse(json);
 		completion(link, link ? nil : IMSharedLinkGuestMalformedError());
 	}];
+}
+
++ (void)clearGuestSession {
+	IMApiClient *client = nil;
+	@synchronized([IMSharedLinkApi class]) {
+		client = sPublicGuestClient;
+		sPublicGuestClient = nil;
+		sPublicGuestIdentity = nil;
+	}
+	[client invalidate];
 }
 
 #pragma mark - Public media
@@ -640,14 +679,15 @@ static NSArray<NSString *> *IMSharedLinkOptionKeys(void) {
 	query[@"size"] = size;
 	if (key.length) query[@"key"] = key;
 	if (slug.length) query[@"slug"] = slug;
-	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
-	client.anonymous = YES;
+	IMApiClient *client = IMSharedLinkRetainedGuestClient(baseURL, key, slug);
+	if (!client) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, parseError ?: IMSharedLinkError(_(@"The public-link session could not be created."))); });
+		return nil;
+	}
 	NSString *path = [NSString stringWithFormat:@"/assets/%@/thumbnail", assetId];
 	NSURLSessionTask *task = [client getData:path query:query completion:^(NSData *data, NSError *error) {
-		[client invalidate];
 		completion(data, error);
 	}];
-	if (!task) [client invalidate];
 	return task;
 }
 
@@ -673,18 +713,105 @@ static NSArray<NSString *> *IMSharedLinkOptionKeys(void) {
 	NSMutableDictionary<NSString *, NSString *> *query = [NSMutableDictionary dictionary];
 	if (key.length) query[@"key"] = key;
 	if (slug.length) query[@"slug"] = slug;
-	IMApiClient *client = [[IMApiClient alloc] initWithBaseURL:baseURL];
-	client.anonymous = YES;
+	IMApiClient *client = IMSharedLinkRetainedGuestClient(baseURL, key, slug);
+	if (!client) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, parseError ?: IMSharedLinkError(_(@"The public-link session could not be created."))); });
+		return nil;
+	}
 	NSString *path = [NSString stringWithFormat:@"/assets/%@/original", assetId];
 	NSURLSessionTask *task = [client downloadFile:path
-	                                        query:query
-	                               destinationURL:destinationURL
-	                                    completion:^(NSURL *fileURL, NSError *error) {
-		[client invalidate];
+	                                    query:query
+	                           destinationURL:destinationURL
+	                                completion:^(NSURL *fileURL, NSError *error) {
 		completion(fileURL, error);
 	}];
-	if (!task) [client invalidate];
 	return task;
+}
+
++ (void)guestUploadFileAtURL:(NSURL *)fileURL
+                    publicURL:(NSURL *)publicURL
+                    completion:(void (^)(BOOL duplicate, NSString *_Nullable assetId, NSError *_Nullable error))completion {
+	if (![fileURL isKindOfClass:[NSURL class]] || !fileURL.isFileURL || fileURL.path.length == 0) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, nil, IMSharedLinkError(_(@"A local file is required for a shared-link upload."))); });
+		return;
+	}
+	NSError *parseError = nil;
+	NSURL *baseURL = IMSharedLinkAPIBaseURL(publicURL, &parseError);
+	NSString *key = nil;
+	NSString *slug = nil;
+	if (!baseURL || !IMSharedLinkIdentifiersFromPublicURL(publicURL, &key, &slug, &parseError)) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, nil, parseError ?: IMSharedLinkError(_(@"The public-link URL is invalid."))); });
+		return;
+	}
+	NSArray<NSURLQueryItem *> *queryItems = IMSharedLinkIdentifierQuery(key, slug, &parseError);
+	if (!queryItems) {
+		dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, nil, parseError); });
+		return;
+	}
+	BOOL scoped = [fileURL startAccessingSecurityScopedResource];
+	NSURL *selectedURL = [fileURL copy];
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		NSError *readError = nil;
+		NSData *data = [NSData dataWithContentsOfURL:selectedURL options:NSDataReadingMappedIfSafe error:&readError];
+		NSDate *createdDate = nil;
+		NSDate *modifiedDate = nil;
+		[selectedURL getResourceValue:&createdDate forKey:NSURLCreationDateKey error:NULL];
+		[selectedURL getResourceValue:&modifiedDate forKey:NSURLContentModificationDateKey error:NULL];
+		if (scoped) [selectedURL stopAccessingSecurityScopedResource];
+		NSString *filename = selectedURL.lastPathComponent;
+		if (![filename isKindOfClass:[NSString class]] || filename.length == 0) filename = @"shared-upload";
+		filename = [filename stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+		filename = [filename stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+		NSDate *fallbackDate = [NSDate date];
+		createdDate = [createdDate isKindOfClass:[NSDate class]] ? createdDate : fallbackDate;
+		modifiedDate = [modifiedDate isKindOfClass:[NSDate class]] ? modifiedDate : createdDate;
+		NSISO8601DateFormatter *formatter = [[NSISO8601DateFormatter alloc] init];
+		formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
+		NSString *created = [formatter stringFromDate:createdDate];
+		NSString *modified = [formatter stringFromDate:modifiedDate];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (data.length == 0) {
+				NSError *error = readError ?: IMSharedLinkError(_(@"The selected file could not be read or is empty."));
+				completion(NO, nil, error);
+				return;
+			}
+			IMApiClient *client = IMSharedLinkRetainedGuestClient(baseURL, key, slug);
+			if (!client) {
+				completion(NO, nil, IMSharedLinkError(_(@"The public-link session could not be created.")));
+				return;
+			}
+			NSDictionary<NSString *, NSString *> *fields = @{
+				@"filename": filename,
+				@"fileCreatedAt": created,
+				@"fileModifiedAt": modified,
+			};
+			[client multipartPOST:@"/assets"
+			           queryItems:queryItems
+			               fields:fields
+			            fileField:@"assetData"
+			             filename:filename
+			             fileData:data
+			           completion:^(id json, NSError *error) {
+				if (error) {
+					completion(NO, nil, error);
+					return;
+				}
+				if (![json isKindOfClass:[NSDictionary class]]) {
+					completion(NO, nil, IMSharedLinkError(_(@"The server returned an invalid shared-link upload response.")));
+					return;
+				}
+				NSString *status = ((NSDictionary *)json)[@"status"];
+				NSString *assetId = ((NSDictionary *)json)[@"id"];
+				if (![status isKindOfClass:[NSString class]] ||
+				    !([status isEqualToString:@"created"] || [status isEqualToString:@"duplicate"]) ||
+				    !IMSharedLinkUUIDv4Valid(assetId)) {
+					completion(NO, nil, IMSharedLinkError(_(@"The server returned an invalid shared-link upload response.")));
+					return;
+				}
+				completion([status isEqualToString:@"duplicate"], assetId, nil);
+			}];
+		});
+	});
 }
 
 @end

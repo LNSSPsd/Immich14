@@ -591,7 +591,23 @@ static NSString *IMMultipartQuote(NSString *value) {
                            filename:(NSString *)filename
                            fileData:(NSData *)fileData
                          completion:(IMJSONHandler)completion {
-	NSURL *url = [self URLForPath:path query:nil];
+	return [self multipartPOST:path
+	                queryItems:nil
+	                    fields:fields
+	                 fileField:fileField
+	                  filename:filename
+	                  fileData:fileData
+	                completion:completion];
+}
+
+- (NSURLSessionTask *)multipartPOST:(NSString *)path
+                         queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+                             fields:(NSDictionary<NSString *, NSString *> *)fields
+                          fileField:(NSString *)fileField
+                           filename:(NSString *)filename
+                           fileData:(NSData *)fileData
+                         completion:(IMJSONHandler)completion {
+	NSURL *url = [self URLForPath:path queryItems:queryItems];
 	if (!url) {
 		[self failJSON:completion withError:[self invalidURLError]];
 		return nil;

@@ -74,6 +74,14 @@ typedef void (^IMFileHandler)(NSURL *_Nullable fileURL, NSError *_Nullable error
                            fileData:(NSData *)fileData
                          completion:(IMJSONHandler)completion;
 
+- (NSURLSessionTask *)multipartPOST:(NSString *)path
+                         queryItems:(nullable NSArray<NSURLQueryItem *> *)queryItems
+                             fields:(NSDictionary<NSString *, NSString *> *)fields
+                          fileField:(NSString *)fileField
+                           filename:(NSString *)filename
+                           fileData:(NSData *)fileData
+                         completion:(IMJSONHandler)completion;
+
 @end
 
 NS_ASSUME_NONNULL_END
