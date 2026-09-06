@@ -494,6 +494,7 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 	self.loadingMethods = YES;
 	self.configureMethodButton.enabled = NO;
 	self.insertMethodButton.enabled = NO;
+	self.stepsView.editable = NO;
 	self.navigationItem.rightBarButtonItem.enabled = NO;
 	[self.spinner startAnimating];
 	__weak typeof(self) weakSelf = self;
@@ -513,6 +514,7 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 			strongSelf.loadingMethods = NO;
 			strongSelf.configureMethodButton.enabled = YES;
 			strongSelf.insertMethodButton.enabled = YES;
+			strongSelf.stepsView.editable = YES;
 			strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
 			[strongSelf.spinner stopAnimating];
 			if (error || !methods) {
