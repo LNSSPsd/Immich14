@@ -180,6 +180,7 @@
 @property (nonatomic, strong) UISegmentedControl *ratingControl;
 @property (nonatomic, strong) UISwitch *favoriteSwitch;
 @property (nonatomic, strong) UISwitch *notInAlbumSwitch;
+@property (nonatomic, strong) UISwitch *encodedSwitch;
 @property (nonatomic, strong) UISwitch *motionSwitch;
 @property (nonatomic, strong) UISwitch *offlineSwitch;
 @property (nonatomic, strong) UISwitch *withStackedSwitch;
@@ -331,6 +332,9 @@ static NSString *IMSearchFilterTrimmedText(UITextField *field) {
 	self.favoriteSwitch = [[UISwitch alloc] init];
 	self.favoriteSwitch.accessibilityLabel = _(@"Favorites only");
 	[stack addArrangedSubview:[self rowWithTitle:_(@"Favorites only") control:self.favoriteSwitch]];
+	self.encodedSwitch = [[UISwitch alloc] init];
+	self.encodedSwitch.accessibilityLabel = _(@"Encoded assets only");
+	[stack addArrangedSubview:[self rowWithTitle:_(@"Encoded assets only") control:self.encodedSwitch]];
 	self.notInAlbumSwitch = [[UISwitch alloc] init];
 	self.notInAlbumSwitch.accessibilityLabel = _(@"Not in an album");
 	[stack addArrangedSubview:[self rowWithTitle:_(@"Not in an album") control:self.notInAlbumSwitch]];
@@ -634,6 +638,7 @@ static NSString *IMSearchFilterTrimmedText(UITextField *field) {
 	if (self.ratingControl.selectedSegmentIndex == 1) criteria[@"rating"] = [NSNull null];
 	if (self.ratingControl.selectedSegmentIndex >= 2) criteria[@"rating"] = @(self.ratingControl.selectedSegmentIndex - 1);
 	if (self.favoriteSwitch.isOn) criteria[@"isFavorite"] = @YES;
+	if (self.encodedSwitch.isOn) criteria[@"isEncoded"] = @YES;
 	if (self.notInAlbumSwitch.isOn) criteria[@"isNotInAlbum"] = @YES;
 	if (self.motionSwitch.isOn) criteria[@"isMotion"] = @YES;
 	if (self.offlineSwitch.isOn) criteria[@"isOffline"] = @YES;
