@@ -1,5 +1,83 @@
 #import "IMSearchFilterViewController.h"
+#import "IMAlbumApi.h"
 #import "common.h"
+
+@interface IMSearchAlbumPickerViewController : UITableViewController
+@property (nonatomic, copy) NSArray<IMAlbum *> *albums;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selectedAlbumIds;
+@property (nonatomic, copy, nullable) void (^completion)(NSSet<NSString *> *selectedIds);
+- (instancetype)initWithAlbums:(NSArray<IMAlbum *> *)albums
+                    selectedIds:(NSSet<NSString *> *)selectedIds
+                      completion:(nullable void (^)(NSSet<NSString *> *selectedIds))completion;
+@end
+
+@implementation IMSearchAlbumPickerViewController
+
+- (instancetype)initWithAlbums:(NSArray<IMAlbum *> *)albums
+                    selectedIds:(NSSet<NSString *> *)selectedIds
+                      completion:(void (^)(NSSet<NSString *> *selectedIds))completion {
+	self = [super initWithStyle:UITableViewStyleInsetGrouped];
+	if (self) {
+		_albums = [albums copy];
+		_selectedAlbumIds = [selectedIds mutableCopy] ?: [NSMutableSet set];
+		_completion = [completion copy];
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = _(@"Albums");
+	self.tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectZero];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+	                                                                                          target:self
+	                                                                                          action:@selector(cancelTapped)];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+	                                                                                           target:self
+	                                                                                           action:@selector(doneTapped)];
+	self.navigationItem.rightBarButtonItem.accessibilityLabel = _(@"Apply album filter");
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.albums.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *const reuseIdentifier = @"SearchAlbumFilterCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseIdentifier];
+	if (!cell) {
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuseIdentifier];
+	}
+	IMAlbum *album = self.albums[indexPath.row];
+	cell.textLabel.text = album.name;
+	cell.detailTextLabel.text = [NSString stringWithFormat:_(@"%ld photos"), (long)album.assetCount];
+	BOOL selected = [self.selectedAlbumIds containsObject:album.albumId];
+	cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	cell.accessibilityTraits = selected ? UIAccessibilityTraitButton | UIAccessibilityTraitSelected : UIAccessibilityTraitButton;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	IMAlbum *album = self.albums[indexPath.row];
+	if ([self.selectedAlbumIds containsObject:album.albumId]) {
+		[self.selectedAlbumIds removeObject:album.albumId];
+	} else if (album.albumId.length > 0) {
+		[self.selectedAlbumIds addObject:album.albumId];
+	}
+	[tableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)cancelTapped {
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)doneTapped {
+	if (self.completion) self.completion([self.selectedAlbumIds copy]);
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+@end
 
 @interface IMSearchFilterViewController ()
 @property (nonatomic, copy) IMSearchFilterApplyHandler applyHandler;
@@ -12,6 +90,12 @@
 @property (nonatomic, strong) UISegmentedControl *ratingControl;
 @property (nonatomic, strong) UISwitch *favoriteSwitch;
 @property (nonatomic, strong) UISwitch *notInAlbumSwitch;
+@property (nonatomic, strong) UISwitch *motionSwitch;
+@property (nonatomic, strong) UISwitch *offlineSwitch;
+@property (nonatomic, strong) UISwitch *withStackedSwitch;
+@property (nonatomic, strong) UIButton *albumButton;
+@property (nonatomic, copy) NSArray<IMAlbum *> *albums;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selectedAlbumIds;
 @end
 
 static NSString *IMSearchFilterISODate(NSDate *date) {
@@ -27,6 +111,8 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	self = [super initWithNibName:nil bundle:nil];
 	if (self) {
 		_applyHandler = [handler copy];
+		_albums = [IMAlbumApi cachedAlbums];
+		_selectedAlbumIds = [NSMutableSet set];
 	}
 	return self;
 }
@@ -110,6 +196,12 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	self.notInAlbumSwitch = [[UISwitch alloc] init];
 	self.notInAlbumSwitch.accessibilityLabel = _(@"Not in an album");
 	[stack addArrangedSubview:[self rowWithTitle:_(@"Not in an album") control:self.notInAlbumSwitch]];
+	self.motionSwitch = [[UISwitch alloc] init];
+	self.motionSwitch.accessibilityLabel = _(@"Motion photos only");
+	[stack addArrangedSubview:[self rowWithTitle:_(@"Motion photos only") control:self.motionSwitch]];
+	self.offlineSwitch = [[UISwitch alloc] init];
+	self.offlineSwitch.accessibilityLabel = _(@"Offline assets only");
+	[stack addArrangedSubview:[self rowWithTitle:_(@"Offline assets only") control:self.offlineSwitch]];
 }
 
 - (UILabel *)labelWithText:(NSString *)text {
@@ -184,6 +276,8 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	if (self.ratingControl.selectedSegmentIndex >= 2) criteria[@"rating"] = @(self.ratingControl.selectedSegmentIndex - 1);
 	if (self.favoriteSwitch.isOn) criteria[@"isFavorite"] = @YES;
 	if (self.notInAlbumSwitch.isOn) criteria[@"isNotInAlbum"] = @YES;
+	if (self.motionSwitch.isOn) criteria[@"isMotion"] = @YES;
+	if (self.offlineSwitch.isOn) criteria[@"isOffline"] = @YES;
 	if (self.applyHandler) self.applyHandler(criteria.copy);
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
