@@ -59,6 +59,12 @@ FOUNDATION_EXPORT NSString *const IMSearchSuggestionTypeCameraLensModel;
 + (nullable NSURLSessionTask *)metadataSearchWithMake:(NSString *)make
                                                   page:(NSInteger)page
                                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithModel:(NSString *)model
+                                                   page:(NSInteger)page
+                                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)metadataSearchWithLensModel:(NSString *)lensModel
+                                                       page:(NSInteger)page
+                                                 completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion;
 
 + (nullable NSURLSessionTask *)metadataSearchWithTagId:(NSString *)tagId
                                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion;

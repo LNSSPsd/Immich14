@@ -332,6 +332,16 @@ static const CGFloat kScopeBarHeight = 44;
 	                                        handler:^(UIAlertAction *action) {
 		[weakSelf loadCameraMakeSuggestions];
 	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Camera models")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadCameraModelSuggestions];
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Camera lenses")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadCameraLensSuggestions];
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
 	if (sheet.popoverPresentationController) {
 		sheet.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
@@ -504,13 +514,28 @@ static const CGFloat kScopeBarHeight = 44;
 	}];
 }
 
+
 - (void)loadCameraMakeSuggestions {
+	[self loadCameraSuggestionsForType:IMSearchSuggestionTypeCameraMake title:_(@"Camera makes") criteriaKey:@"make"];
+}
+
+- (void)loadCameraModelSuggestions {
+	[self loadCameraSuggestionsForType:IMSearchSuggestionTypeCameraModel title:_(@"Camera models") criteriaKey:@"model"];
+}
+
+- (void)loadCameraLensSuggestions {
+	[self loadCameraSuggestionsForType:IMSearchSuggestionTypeCameraLensModel title:_(@"Camera lenses") criteriaKey:@"lensModel"];
+}
+
+- (void)loadCameraSuggestionsForType:(NSString *)type
+	                             title:(NSString *)title
+	                       criteriaKey:(NSString *)criteriaKey {
 	[self.discoveryTask cancel];
 	NSInteger generation = ++self.discoveryGeneration;
 	[self.activityIndicator startAnimating];
 	NSString *query = self.lastQuery.lowercaseString;
 	__weak typeof(self) weakSelf = self;
-	self.discoveryTask = [IMSearchApi searchSuggestionsForType:IMSearchSuggestionTypeCameraMake
+	self.discoveryTask = [IMSearchApi searchSuggestionsForType:type
 	                                                    country:nil
 	                                                       state:nil
 	                                                       make:nil
@@ -524,7 +549,7 @@ static const CGFloat kScopeBarHeight = 44;
 		[strongSelf.activityIndicator stopAnimating];
 		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) return;
 		if (error || !suggestions) {
-			[strongSelf showDiscoveryError:error title:_(@"Camera makes")];
+			[strongSelf showDiscoveryError:error title:title];
 			return;
 		}
 		NSMutableArray<NSString *> *filtered = [NSMutableArray arrayWithCapacity:MIN((NSUInteger)30, suggestions.count)];
@@ -534,15 +559,16 @@ static const CGFloat kScopeBarHeight = 44;
 			if (filtered.count == 30) break;
 		}
 		if (filtered.count == 0) {
-			[strongSelf showDiscoveryError:[NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:@{ NSLocalizedDescriptionKey: _(@"No camera makes found.") }]
-			                         title:_(@"Camera makes")];
+			[strongSelf showDiscoveryError:[NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:_(@"No %@ found."), title.lowercaseString] }]
+			                         title:title];
 			return;
 		}
 		if (!strongSelf.viewIfLoaded.window) return;
-		UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Choose a camera make") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+		NSString *chooseTitle = [NSString stringWithFormat:_(@"Choose a %@"), title.lowercaseString];
+		UIAlertController *sheet = [UIAlertController alertControllerWithTitle:chooseTitle message:nil preferredStyle:UIAlertControllerStyleActionSheet];
 		for (NSString *suggestion in filtered) {
 			[sheet addAction:[UIAlertAction actionWithTitle:suggestion style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-				[strongSelf loadCameraMakeAssets:suggestion];
+				[strongSelf loadCameraAssetsWithField:criteriaKey value:suggestion title:title];
 			}]];
 		}
 		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
@@ -551,17 +577,20 @@ static const CGFloat kScopeBarHeight = 44;
 	}];
 }
 
-- (void)loadCameraMakeAssets:(NSString *)make {
+- (void)loadCameraAssetsWithField:(NSString *)field value:(NSString *)value title:(NSString *)title {
 	[self.browseTask cancel];
 	self.browseTask = nil;
 	__weak typeof(self) weakSelf = self;
-	self.browseRetryAction = ^{ [weakSelf loadCameraMakeAssets:make]; };
-	[self startBrowseTask:[IMSearchApi metadataSearchWithMake:make
-	                                                           page:1
-	                                                     completion:[self browseCompletionWithTitle:make
-	                                                                                     pageLoader:^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
-		return [IMSearchApi metadataSearchWithMake:make page:page completion:pageCompletion];
-	}]]];
+	self.browseRetryAction = ^{ [weakSelf loadCameraAssetsWithField:field value:value title:title]; };
+	IMAssetGridPageLoader pageLoader = ^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
+		if ([field isEqualToString:@"make"]) return [IMSearchApi metadataSearchWithMake:value page:page completion:pageCompletion];
+		if ([field isEqualToString:@"model"]) return [IMSearchApi metadataSearchWithModel:value page:page completion:pageCompletion];
+		return [IMSearchApi metadataSearchWithLensModel:value page:page completion:pageCompletion];
+	};
+	[self startBrowseTask:pageLoader(1, [self browseCompletionWithTitle:[NSString stringWithFormat:@"%@: %@", title, value]
+	                                                               pageLoader:pageLoader])];
+	/* The loader is intentionally used for the first page too, so all three filters share
+	 * the same response validation and pagination behavior. */
 }
 
 #pragma mark - UISearchResultsUpdating
