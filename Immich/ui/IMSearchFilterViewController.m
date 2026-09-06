@@ -613,8 +613,9 @@ static NSString *IMSearchFilterTrimmedText(UITextField *field) {
 }
 
 - (void)applyTapped {
-	NSDate *afterDate = self.afterPicker.date;
-	NSDate *beforeDate = self.beforePicker.date;
+	NSCalendar *calendar = [NSCalendar currentCalendar];
+	NSDate *afterDate = [calendar startOfDayForDate:self.afterPicker.date];
+	NSDate *beforeDate = [calendar startOfDayForDate:self.beforePicker.date];
 	if (self.afterSwitch.isOn && self.beforeSwitch.isOn && [afterDate compare:beforeDate] == NSOrderedDescending) {
 		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Invalid date range")
 	                                                                 message:_(@"The start date must be before the end date.")
@@ -626,7 +627,7 @@ static NSString *IMSearchFilterTrimmedText(UITextField *field) {
 	NSMutableDictionary<NSString *, id> *criteria = [NSMutableDictionary dictionary];
 	if (self.afterSwitch.isOn) criteria[@"takenAfter"] = IMSearchFilterISODate(afterDate);
 	if (self.beforeSwitch.isOn) {
-		NSDate *endOfDay = [[NSCalendar currentCalendar] dateByAddingUnit:NSCalendarUnitDay value:1 toDate:beforeDate options:0];
+		NSDate *endOfDay = [calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:beforeDate options:0];
 		endOfDay = [endOfDay dateByAddingTimeInterval:-0.001];
 		criteria[@"takenBefore"] = IMSearchFilterISODate(endOfDay);
 	}
