@@ -150,7 +150,7 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 		[stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
 	]];
 
-	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, visibility, rating, and display options.")];
+	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, visibility, rating, album membership, and display options.")];
 	hint.numberOfLines = 0;
 	if (@available(iOS 13.0, *)) hint.textColor = UIColor.secondaryLabelColor;
 	[stack addArrangedSubview:hint];
@@ -202,6 +202,27 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	self.offlineSwitch = [[UISwitch alloc] init];
 	self.offlineSwitch.accessibilityLabel = _(@"Offline assets only");
 	[stack addArrangedSubview:[self rowWithTitle:_(@"Offline assets only") control:self.offlineSwitch]];
+	self.withStackedSwitch = [[UISwitch alloc] init];
+	self.withStackedSwitch.accessibilityLabel = _(@"Include stacked assets");
+	[stack addArrangedSubview:[self rowWithTitle:_(@"Include stacked assets") control:self.withStackedSwitch]];
+
+	[stack addArrangedSubview:[self labelWithText:_(@"Album membership")]];
+	self.albumButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.albumButton.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.albumButton setTitle:_(@"Any album") forState:UIControlStateNormal];
+	self.albumButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+	self.albumButton.titleLabel.adjustsFontForContentSizeCategory = YES;
+	self.albumButton.accessibilityLabel = _(@"Album membership filter");
+	[self.albumButton addTarget:self action:@selector(albumButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+	[stack addArrangedSubview:self.albumButton];
+	if (self.albums.count == 0) {
+		__weak typeof(self) weakSelf = self;
+		[IMAlbumApi allAlbumsWithCompletion:^(NSArray<IMAlbum *> *_Nullable albums, NSError *_Nullable error) {
+			if (albums.count == 0 || error) return;
+			IMSearchFilterViewController *strongSelf = weakSelf;
+			if (strongSelf) strongSelf.albums = albums;
+		}];
+	}
 }
 
 - (UILabel *)labelWithText:(NSString *)text {
@@ -245,6 +266,45 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	if (sender == self.beforeSwitch) self.beforePicker.enabled = sender.isOn;
 }
 
+- (void)albumButtonTapped {
+	NSArray<IMAlbum *> *albums = [self.albums sortedArrayUsingComparator:^NSComparisonResult(IMAlbum *a, IMAlbum *b) {
+		return [a.name localizedCaseInsensitiveCompare:b.name];
+	}];
+	if (albums.count == 0) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Album membership")
+		                                                                 message:_(@"No albums are available for this account.")
+		                                                          preferredStyle:UIAlertControllerStyleAlert];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		[self presentViewController:alert animated:YES completion:nil];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	IMSearchAlbumPickerViewController *picker = [[IMSearchAlbumPickerViewController alloc]
+		initWithAlbums:albums
+		selectedIds:self.selectedAlbumIds
+		completion:^(NSSet<NSString *> *selectedIds) {
+			IMSearchFilterViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.selectedAlbumIds = [selectedIds mutableCopy];
+			NSString *title;
+			if (selectedIds.count == 0) {
+				title = _(@"Any album");
+			} else if (selectedIds.count == 1) {
+				IMAlbum *album = nil;
+				for (IMAlbum *candidate in albums) {
+					if ([selectedIds containsObject:candidate.albumId]) { album = candidate; break; }
+				}
+				title = album.name.length ? album.name : _(@"1 album selected");
+			} else {
+				title = [NSString stringWithFormat:_(@"%ld albums selected"), (long)selectedIds.count];
+			}
+			[strongSelf.albumButton setTitle:title forState:UIControlStateNormal];
+		}];
+	UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
+	navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+	[self presentViewController:navigationController animated:YES completion:nil];
+}
+
 - (void)cancelTapped {
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -278,6 +338,10 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	if (self.notInAlbumSwitch.isOn) criteria[@"isNotInAlbum"] = @YES;
 	if (self.motionSwitch.isOn) criteria[@"isMotion"] = @YES;
 	if (self.offlineSwitch.isOn) criteria[@"isOffline"] = @YES;
+	if (self.withStackedSwitch.isOn) criteria[@"withStacked"] = @YES;
+	if (self.selectedAlbumIds.count > 0) {
+		criteria[@"albumIds"] = [[self.selectedAlbumIds allObjects] sortedArrayUsingSelector:@selector(compare:)];
+	}
 	if (self.applyHandler) self.applyHandler(criteria.copy);
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
