@@ -6,9 +6,106 @@
 #import "IMPluginApi.h"
 #import "PluginsViewController.h"
 #import "common.h"
+#include <math.h>
+#include <string.h>
 
 static NSString *const IMWorkflowAssetCreateTrigger = @"AssetCreate";
 static NSString *const IMWorkflowMetadataTrigger = @"AssetMetadataExtraction";
+
+static BOOL IMWorkflowSchemaNumber(id value) {
+	if (![value isKindOfClass:[NSNumber class]]) return NO;
+	const char *type = [(NSNumber *)value objCType];
+	return type && strcmp(type, @encode(BOOL)) != 0 && strcmp(type, @encode(bool)) != 0;
+}
+
+static BOOL IMWorkflowSchemaValidateValue(id value,
+	                                         NSDictionary *schema,
+	                                         NSString *path,
+	                                         NSString **message) {
+	if (![schema isKindOfClass:[NSDictionary class]]) return YES;
+	if ([value isKindOfClass:[NSNull class]] || value == nil) {
+		if (message) *message = [NSString stringWithFormat:_(@"%@ must have a value."), path];
+		return NO;
+	}
+
+	BOOL isArray = [schema[@"array"] isKindOfClass:[NSNumber class]] && [schema[@"array"] boolValue];
+	if (isArray) {
+		if (![value isKindOfClass:[NSArray class]]) {
+			if (message) *message = [NSString stringWithFormat:_(@"%@ must be an array."), path];
+			return NO;
+		}
+		NSMutableDictionary *itemSchema = [schema mutableCopy];
+		[itemSchema removeObjectForKey:@"array"];
+		NSUInteger index = 0;
+		for (id item in (NSArray *)value) {
+			NSString *itemPath = [NSString stringWithFormat:@"%@[%lu]", path, (unsigned long)index];
+			if (!IMWorkflowSchemaValidateValue(item, itemSchema, itemPath, message)) return NO;
+			index++;
+		}
+		return YES;
+	}
+
+	NSString *type = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : nil;
+	NSDictionary *properties = [schema[@"properties"] isKindOfClass:[NSDictionary class]] ? schema[@"properties"] : nil;
+	if (!type.length && properties) type = @"object";
+	BOOL valid = YES;
+	if ([type isEqualToString:@"object"]) {
+		if (![value isKindOfClass:[NSDictionary class]]) valid = NO;
+		if (valid && properties) {
+			id required = schema[@"required"];
+			if ([required isKindOfClass:[NSArray class]]) {
+				for (id requiredKey in (NSArray *)required) {
+					if (![requiredKey isKindOfClass:[NSString class]]) continue;
+					id requiredValue = ((NSDictionary *)value)[requiredKey];
+					if (requiredValue == nil || [requiredValue isKindOfClass:[NSNull class]]) {
+						if (message) *message = [NSString stringWithFormat:_(@"%@ is required."), [path stringByAppendingPathComponent:requiredKey]];
+						return NO;
+					}
+				}
+			}
+			for (NSString *key in properties) {
+				id child = ((NSDictionary *)value)[key];
+				if (child == nil || [child isKindOfClass:[NSNull class]]) continue;
+				NSDictionary *childSchema = [properties[key] isKindOfClass:[NSDictionary class]] ? properties[key] : nil;
+				if (!childSchema) continue;
+				if (!IMWorkflowSchemaValidateValue(child, childSchema, [path stringByAppendingPathComponent:key], message)) return NO;
+			}
+		}
+	} else if ([type isEqualToString:@"string"]) {
+		valid = [value isKindOfClass:[NSString class]];
+	} else if ([type isEqualToString:@"number"]) {
+		valid = IMWorkflowSchemaNumber(value);
+	} else if ([type isEqualToString:@"integer"]) {
+		valid = IMWorkflowSchemaNumber(value) && floor([(NSNumber *)value doubleValue]) == [(NSNumber *)value doubleValue];
+	} else if ([type isEqualToString:@"boolean"]) {
+		valid = [value isKindOfClass:[NSNumber class]] &&
+		        (strcmp([(NSNumber *)value objCType], @encode(BOOL)) == 0 || strcmp([(NSNumber *)value objCType], @encode(bool)) == 0);
+	}
+	if (!valid) {
+		if (message) *message = [NSString stringWithFormat:_(@"%@ has the wrong type."), path];
+		return NO;
+	}
+
+	id enumeration = schema[@"enum"];
+	if ([enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0 && ![(NSArray *)enumeration containsObject:value]) {
+		if (message) *message = [NSString stringWithFormat:_(@"%@ must be one of %@."), path, [(NSArray *)enumeration componentsJoinedByString:@", "]];
+		return NO;
+	}
+	if (IMWorkflowSchemaNumber(value)) {
+		double number = [(NSNumber *)value doubleValue];
+		id minimum = schema[@"minimum"];
+		id maximum = schema[@"maximum"];
+		if ([minimum isKindOfClass:[NSNumber class]] && number < [minimum doubleValue]) {
+			if (message) *message = [NSString stringWithFormat:_(@"%@ must be at least %@."), path, minimum];
+			return NO;
+		}
+		if ([maximum isKindOfClass:[NSNumber class]] && number > [maximum doubleValue]) {
+			if (message) *message = [NSString stringWithFormat:_(@"%@ must be at most %@."), path, maximum];
+			return NO;
+		}
+	}
+	return YES;
+}
 
 typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 
@@ -123,7 +220,7 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 	self.stepsView.text = [self stepsJSONString:self.workflow.steps ?: @[]];
 	[stack addArrangedSubview:self.stepsView];
 
-	UILabel *hint = [self labelWithText:_(@"Each step needs a method such as plugin#method. Config must be an object or null; enabled defaults to true.")];
+	UILabel *hint = [self labelWithText:_(@"Each step needs a method such as plugin#method. Config must be an object or null; enabled defaults to true. Config values are checked against the selected plugin method schema before saving.")];
 	hint.numberOfLines = 0;
 	if (@available(iOS 13.0, *)) hint.textColor = UIColor.secondaryLabelColor;
 	[stack addArrangedSubview:hint];
@@ -194,8 +291,12 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 			return;
 		}
 		NSMutableSet<NSString *> *available = [NSMutableSet setWithCapacity:methods.count];
+		NSMutableDictionary<NSString *, IMPluginMethod *> *methodsByKey = [NSMutableDictionary dictionaryWithCapacity:methods.count];
 		for (IMPluginMethod *method in methods) {
-			if (method.key.length) [available addObject:method.key];
+			if (method.key.length) {
+				[available addObject:method.key];
+				methodsByKey[method.key] = method;
+			}
 		}
 		NSUInteger index = 0;
 		for (IMWorkflowStep *step in steps) {
@@ -203,6 +304,16 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 			if (![available containsObject:step.method]) {
 				completion([NSString stringWithFormat:_(@"Step %lu uses an unavailable method: %@"), (unsigned long)index, step.method]);
 				return;
+			}
+			IMPluginMethod *method = methodsByKey[step.method];
+			if (method.schema.count > 0) {
+				NSString *schemaError = nil;
+				NSDictionary *config = step.config ?: @{};
+				if (!IMWorkflowSchemaValidateValue(config, method.schema, _(@"config"), &schemaError)) {
+					completion([NSString stringWithFormat:_(@"Step %lu configuration is invalid: %@"),
+					            (unsigned long)index, schemaError ?: _(@"Check the plugin schema.")]);
+					return;
+				}
 			}
 		}
 		completion(nil);
