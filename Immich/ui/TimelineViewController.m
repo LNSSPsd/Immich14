@@ -5,6 +5,7 @@
 #import "IMAssetApi.h"
 #import "IMSyncStreamApi.h"
 #import "AssetViewController.h"
+#import "LocalAssetPreviewViewController.h"
 #import "IMBulkAssetActions.h"
 #import "IMDatabase.h"
 #import "IMPhotoLibrary.h"
@@ -834,10 +835,16 @@ static const CGFloat kCellSpacing = 2;
 	}
 
 	NSString *bucket = self.bucketDates[indexPath.section];
+	IMTimelineLocalItem *localItem = [self localItemAtIndexPath:indexPath];
 	IMAsset *asset = [self loadedServerAssetAtIndexPath:indexPath];
 
 	if (!self.selecting) {
 		[collectionView deselectItemAtIndexPath:indexPath animated:YES];
+		if (localItem) {
+			LocalAssetPreviewViewController *preview = [LocalAssetPreviewViewController previewWithAsset:localItem.asset];
+			[self.navigationController pushViewController:preview animated:YES];
+			return;
+		}
 		if (!asset) {
 			return;
 		}

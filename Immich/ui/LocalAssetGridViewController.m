@@ -1,4 +1,5 @@
 #import "LocalAssetGridViewController.h"
+#import "LocalAssetPreviewViewController.h"
 #import "common.h"
 #import <Photos/Photos.h>
 #import <math.h>
@@ -217,6 +218,13 @@ static const CGFloat kCellSpacing = 2;
 	CGFloat width = collectionView.bounds.size.width;
 	CGFloat side = (width - (kColumns - 1) * kCellSpacing) / kColumns;
 	return CGSizeMake(side, side);
+}
+
+- (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
+	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
+	if (indexPath.item >= self.assets.count) return;
+	LocalAssetPreviewViewController *preview = [LocalAssetPreviewViewController previewWithAsset:self.assets[indexPath.item]];
+	[self.navigationController pushViewController:preview animated:YES];
 }
 
 @end
