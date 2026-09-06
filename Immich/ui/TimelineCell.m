@@ -3,6 +3,7 @@
 #import "IMAssetApi.h"
 #import "IMPrefs.h"
 #import "common.h"
+#import <math.h>
 
 NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 
@@ -15,6 +16,14 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 @property (nonatomic, strong, nullable) IMThumbCacheTask *thumbTask;
 @property (nonatomic) PHImageRequestID localRequestId;
 @end
+
+static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
+	if (!date) return fallback ?: @"";
+	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+	formatter.dateStyle = NSDateFormatterMediumStyle;
+	formatter.timeStyle = NSDateFormatterShortStyle;
+	return [formatter stringFromDate:date] ?: fallback ?: @"";
+}
 
 @implementation TimelineCell
 
@@ -98,11 +107,64 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 	_selectionModeEnabled = selectionModeEnabled;
 	self.selectionCircleView.hidden = !selectionModeEnabled;
 	[self updateSelectionCircleImage];
+	[self updateAccessibilityTraits];
 }
 
 - (void)setSelected:(BOOL)selected {
 	[super setSelected:selected];
 	[self updateSelectionCircleImage];
+	[self updateAccessibilityTraits];
+}
+
+- (void)updateAccessibilityTraits {
+	if (!self.isAccessibilityElement) return;
+	UIAccessibilityTraits traits = UIAccessibilityTraitImage;
+	if (self.selectionModeEnabled) traits |= UIAccessibilityTraitButton;
+	if (self.selectionModeEnabled && self.selected) traits |= UIAccessibilityTraitSelected;
+	self.accessibilityTraits = traits;
+}
+
+- (void)setAccessibilityForAsset:(IMAsset *)asset {
+	self.isAccessibilityElement = asset != nil;
+	if (!asset) {
+		self.accessibilityLabel = nil;
+		self.accessibilityValue = nil;
+		return;
+	}
+	NSString *kind = asset.isImage ? _(@"Photo") : _(@"Video");
+	NSString *date = IMTimelineAccessibilityDate(IMDateFromServerTimestamp(asset.fileCreatedAt), asset.fileCreatedAt);
+	self.accessibilityLabel = date.length ? [NSString stringWithFormat:_(@"%@, %@"), kind, date] : kind;
+	NSMutableArray<NSString *> *details = [NSMutableArray array];
+	if (!asset.isImage && asset.durationMs > 0) {
+		NSInteger totalSeconds = asset.durationMs / 1000;
+		[details addObject:[NSString stringWithFormat:_(@"Duration %ld minutes %ld seconds"), (long)(totalSeconds / 60), (long)(totalSeconds % 60)]];
+	}
+	if (asset.isFavorite) [details addObject:_(@"Favorite")];
+	if (asset.stackAssetCount > 1) [details addObject:[NSString stringWithFormat:_(@"%ld items in stack"), (long)asset.stackAssetCount]];
+	self.accessibilityValue = [details componentsJoinedByString:@", "];
+	[self updateAccessibilityTraits];
+}
+
+- (void)setAccessibilityForLocalAsset:(PHAsset *)asset syncState:(IMSyncState)state {
+	self.isAccessibilityElement = asset != nil;
+	if (!asset) {
+		self.accessibilityLabel = nil;
+		self.accessibilityValue = nil;
+		return;
+	}
+	NSString *kind = asset.mediaType == PHAssetMediaTypeVideo ? _(@"Video") : _(@"Photo");
+	NSString *date = IMTimelineAccessibilityDate(asset.creationDate, nil);
+	self.accessibilityLabel = date.length ? [NSString stringWithFormat:_(@"%@, %@"), kind, date] : kind;
+	NSMutableArray<NSString *> *details = [NSMutableArray array];
+	if (asset.mediaType == PHAssetMediaTypeVideo && asset.duration > 0) {
+		NSInteger totalSeconds = (NSInteger)llround(asset.duration);
+		[details addObject:[NSString stringWithFormat:_(@"Duration %ld minutes %ld seconds"), (long)(totalSeconds / 60), (long)(totalSeconds % 60)]];
+	}
+	if (asset.favorite) [details addObject:_(@"Favorite")];
+	if (state == IMSyncStateUploading) [details addObject:_(@"Uploading")];
+	else if (state == IMSyncStateLocalOnly) [details addObject:_(@"Waiting to upload")];
+	self.accessibilityValue = [details componentsJoinedByString:@", "];
+	[self updateAccessibilityTraits];
 }
 
 - (void)updateSelectionCircleImage {
@@ -153,10 +215,12 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	if (!asset) {
 		self.durationLabel.hidden = YES;
 		self.stackLabel.hidden = YES;
+		[self setAccessibilityForAsset:nil];
 		[self startSkeletonPulse];
 		return;
 	}
 	[self stopSkeletonPulse];
+	[self setAccessibilityForAsset:asset];
 
 	if (asset.isImage || asset.durationMs <= 0) {
 		self.durationLabel.hidden = YES;
@@ -189,10 +253,12 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 
 	if (!asset) {
 		self.syncBadgeView.hidden = YES;
+		[self setAccessibilityForLocalAsset:nil syncState:state];
 		[self startSkeletonPulse];
 		return;
 	}
 	[self stopSkeletonPulse];
+	[self setAccessibilityForLocalAsset:asset syncState:state];
 
 	if (@available(iOS 13.0, *)) {
 		self.syncBadgeView.image = [UIImage systemImageNamed:state == IMSyncStateUploading ? @"icloud.and.arrow.up.fill" : @"icloud.slash.fill"];
@@ -225,6 +291,7 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	self.durationLabel.hidden = YES;
 	self.syncBadgeView.hidden = YES;
 	self.stackLabel.hidden = YES;
+	[self setAccessibilityForAsset:nil];
 }
 
 @end

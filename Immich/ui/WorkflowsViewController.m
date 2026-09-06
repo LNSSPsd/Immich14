@@ -3,6 +3,7 @@
 #import "IMWorkflow.h"
 #import "IMWorkflowStep.h"
 #import "IMApiClient.h"
+#import "IMPluginApi.h"
 #import "PluginsViewController.h"
 #import "common.h"
 
@@ -175,6 +176,39 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)validateStepMethods:(NSArray<IMWorkflowStep *> *)steps
+                    trigger:(NSString *)trigger
+                 completion:(void (^)(NSString *_Nullable message))completion {
+	[IMPluginApi pluginMethodsWithDescription:nil
+	                                  enabled:@YES
+	                                       id:nil
+	                                     name:nil
+	                               pluginName:nil
+	                            pluginVersion:nil
+	                                    title:nil
+	                                  trigger:trigger
+	                                     type:nil
+	                               completion:^(NSArray<IMPluginMethod *> *methods, NSError *error) {
+		if (error || !methods) {
+			completion(error.localizedDescription.length ? error.localizedDescription : _(@"Couldn't validate plugin methods. Check the server connection and try again."));
+			return;
+		}
+		NSMutableSet<NSString *> *available = [NSMutableSet setWithCapacity:methods.count];
+		for (IMPluginMethod *method in methods) {
+			if (method.key.length) [available addObject:method.key];
+		}
+		NSUInteger index = 0;
+		for (IMWorkflowStep *step in steps) {
+			index++;
+			if (![available containsObject:step.method]) {
+				completion([NSString stringWithFormat:_(@"Step %lu uses an unavailable method: %@"), (unsigned long)index, step.method]);
+				return;
+			}
+		}
+		completion(nil);
+	}];
+}
+
 - (NSArray<IMWorkflowStep *> *_Nullable)validatedStepsWithError:(NSString *_Nullable __autoreleasing *)message {
 	NSString *text = [self.stepsView.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
 	if (text.length == 0) text = @"[]";
@@ -262,22 +296,36 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 			if (strongSelf.navigationController) [strongSelf.navigationController popViewControllerAnimated:YES];
 		});
 	};
-	if (self.workflow) {
-		[IMWorkflowApi updateWorkflowId:self.workflow.workflowId
-		                           name:name.length ? name : nil
-		                    description:description.length ? description : nil
-		                        trigger:trigger
-		                        enabled:@(self.enabledSwitch.isOn)
-		                          steps:steps
-		                     completion:completion];
-	} else {
-		[IMWorkflowApi createWorkflowWithName:name.length ? name : nil
-		                          description:description.length ? description : nil
-		                              trigger:trigger
-		                              enabled:self.enabledSwitch.isOn
-		                                steps:steps
-		                           completion:completion];
-	}
+	[self validateStepMethods:steps trigger:trigger completion:^(NSString *validationError) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			IMWorkflowEditorViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			if (validationError.length) {
+				strongSelf.saving = NO;
+				[strongSelf.spinner stopAnimating];
+				strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+				strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
+				[strongSelf showValidation:validationError];
+				return;
+			}
+			if (strongSelf.workflow) {
+				[IMWorkflowApi updateWorkflowId:strongSelf.workflow.workflowId
+				                           name:name.length ? name : nil
+				                    description:description.length ? description : nil
+				                        trigger:trigger
+				                        enabled:@(strongSelf.enabledSwitch.isOn)
+				                          steps:steps
+				                     completion:completion];
+			} else {
+				[IMWorkflowApi createWorkflowWithName:name.length ? name : nil
+				                          description:description.length ? description : nil
+				                              trigger:trigger
+				                              enabled:strongSelf.enabledSwitch.isOn
+				                                steps:steps
+				                           completion:completion];
+			}
+		});
+	}];
 }
 
 @end
