@@ -42,12 +42,15 @@
 	[self.refresh addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
 	self.refreshControl = self.refresh;
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose
-	                                                                                         target:self
-	                                                                                         action:@selector(commentTapped)];
+	                                                                                          target:self
+	                                                                                          action:@selector(commentTapped)];
+	self.navigationItem.rightBarButtonItem.accessibilityLabel = _(@"Add comment");
+	self.navigationItem.rightBarButtonItem.accessibilityHint = _(@"Post a comment to this album or asset.");
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Like")
 	                                                                            style:UIBarButtonItemStylePlain
 	                                                                           target:self
-	                                                                           action:@selector(likeTapped)];
+                                                                           action:@selector(likeTapped)];
+	self.navigationItem.leftBarButtonItem.accessibilityHint = _(@"Add or remove your like.");
 	[self reload];
 }
 
@@ -132,7 +135,9 @@
 }
 
 - (void)updateLikeButton {
-	self.navigationItem.leftBarButtonItem.title = [self currentUserLike] ? _(@"Unlike") : _(@"Like");
+	BOOL liked = self.currentUserLike != nil;
+	self.navigationItem.leftBarButtonItem.title = liked ? _(@"Unlike") : _(@"Like");
+	self.navigationItem.leftBarButtonItem.accessibilityLabel = liked ? _(@"Remove like") : _(@"Like");
 }
 
 - (void)likeTapped {
@@ -209,16 +214,26 @@
 	static NSString *identifier = @"activity-cell";
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
 	if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
+	cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+	cell.textLabel.adjustsFontForContentSizeCategory = YES;
+	cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+	cell.detailTextLabel.adjustsFontForContentSizeCategory = YES;
 	cell.accessoryType = UITableViewCellAccessoryNone;
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	if (indexPath.section == 0) {
 		cell.textLabel.text = [NSString stringWithFormat:_(@"%ld likes · %ld comments"), (long)self.likesCount, (long)self.commentsCount];
 		cell.detailTextLabel.text = _(@"Use Like or Compose to add activity.");
+		cell.isAccessibilityElement = YES;
+		cell.accessibilityLabel = cell.textLabel.text;
+		cell.accessibilityValue = cell.detailTextLabel.text;
 		return cell;
 	}
 	if (self.activities.count == 0) {
 		cell.textLabel.text = _(@"No activity yet");
 		cell.detailTextLabel.text = nil;
+		cell.isAccessibilityElement = YES;
+		cell.accessibilityLabel = cell.textLabel.text;
+		cell.accessibilityValue = nil;
 		return cell;
 	}
 	IMActivity *activity = self.activities[indexPath.row];
@@ -228,6 +243,9 @@
 	    ? [NSString stringWithFormat:_(@"%@ · %@"), activity.comment ?: @"", [self dateString:activity.createdAt]]
 	    : [self dateString:activity.createdAt];
 	cell.detailTextLabel.numberOfLines = 0;
+	cell.isAccessibilityElement = YES;
+	cell.accessibilityLabel = cell.textLabel.text;
+	cell.accessibilityValue = cell.detailTextLabel.text;
 	return cell;
 }
 
