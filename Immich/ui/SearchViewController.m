@@ -7,6 +7,7 @@
 #import "AssetGridViewController.h"
 #import "AssetViewController.h"
 #import "ExploreViewController.h"
+#import "IMSearchFilterViewController.h"
 #import "common.h"
 
 typedef NS_ENUM(NSInteger, IMSearchMode) {
@@ -302,6 +303,11 @@ static const CGFloat kScopeBarHeight = 44;
 	                                        handler:^(UIAlertAction *action) {
 		[weakSelf loadFavoriteAssets];
 	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Advanced filters")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf showAdvancedFilters];
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Random photos")
 	                                          style:UIAlertActionStyleDefault
 	                                        handler:^(UIAlertAction *action) {
@@ -347,6 +353,31 @@ static const CGFloat kScopeBarHeight = 44;
 		sheet.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
 	}
 	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)showAdvancedFilters {
+	__weak typeof(self) weakSelf = self;
+	IMSearchFilterViewController *filters = [[IMSearchFilterViewController alloc] initWithApplyHandler:^(NSDictionary<NSString *, id> *criteria) {
+		[weakSelf loadFilteredAssets:criteria];
+	}];
+	UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:filters];
+	navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+	[self presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)loadFilteredAssets:(NSDictionary<NSString *, id> *)criteria {
+	[self.browseTask cancel];
+	self.browseTask = nil;
+	__weak typeof(self) weakSelf = self;
+	NSString *title = _(@"Filtered photos");
+	self.browseRetryAction = ^{ [weakSelf loadFilteredAssets:criteria]; };
+	IMAssetGridPageLoader pageLoader = ^NSURLSessionTask *_Nullable(NSInteger page,
+	                                                                  void (^pageCompletion)(NSArray<IMAsset *> *_Nullable,
+	                                                                                         NSString *_Nullable,
+	                                                                                         NSError *_Nullable)) {
+		return [IMSearchApi metadataSearchWithCriteria:criteria page:page completion:pageCompletion];
+	};
+	[self startBrowseTask:pageLoader(1, [self browseCompletionWithTitle:title pageLoader:pageLoader])];
 }
 
 - (void)loadFavoriteAssets {
