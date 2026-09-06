@@ -69,14 +69,16 @@
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
 	if (!IMPrefs.shared.backupEnabled || !IMSession.shared.isLoggedIn) return;
-	__weak typeof(self) weakSelf = self;
-	self.syncBackgroundTask = [application beginBackgroundTaskWithExpirationHandler:^{
-		[IMForegroundSync.shared cancel];
-		if (weakSelf.syncBackgroundTask != UIBackgroundTaskInvalid) {
-			[application endBackgroundTask:weakSelf.syncBackgroundTask];
-			weakSelf.syncBackgroundTask = UIBackgroundTaskInvalid;
-		}
-	}];
+	if (self.syncBackgroundTask == UIBackgroundTaskInvalid) {
+		__weak typeof(self) weakSelf = self;
+		self.syncBackgroundTask = [application beginBackgroundTaskWithExpirationHandler:^{
+			[IMForegroundSync.shared cancel];
+			if (weakSelf.syncBackgroundTask != UIBackgroundTaskInvalid) {
+				[application endBackgroundTask:weakSelf.syncBackgroundTask];
+				weakSelf.syncBackgroundTask = UIBackgroundTaskInvalid;
+			}
+		}];
+	}
 	[IMBackupDaemon.shared applicationDidEnterBackground];
 }
 
