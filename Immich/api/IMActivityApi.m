@@ -1,6 +1,8 @@
 #import "IMActivityApi.h"
 #import "IMApiClient.h"
 #import "common.h"
+#include <math.h>
+#include <string.h>
 
 static NSError *IMActivityError(NSString *message) {
 	return [NSError errorWithDomain:IMApiErrorDomain
@@ -36,6 +38,19 @@ static BOOL IMActivityOptionalUUIDv4(id value) {
 		return NO;
 	}
 	return [(NSString *)value length] == 0 || IMActivityUUIDv4(value);
+}
+
+static BOOL IMActivityStrictInteger(id value) {
+	if (![value isKindOfClass:[NSNumber class]]) {
+		return NO;
+	}
+	const char *type = [(NSNumber *)value objCType];
+	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) {
+		return NO;
+	}
+	double number = [(NSNumber *)value doubleValue];
+	return isfinite(number) && floor(number) == number && number >= 0.0 &&
+	       number <= 9007199254740991.0;
 }
 
 @implementation IMActivityApi
@@ -114,8 +129,8 @@ static BOOL IMActivityOptionalUUIDv4(id value) {
 			return;
 		}
 		if (![json isKindOfClass:[NSDictionary class]] ||
-		    ![json[@"comments"] isKindOfClass:[NSNumber class]] ||
-		    ![json[@"likes"] isKindOfClass:[NSNumber class]]) {
+		    !IMActivityStrictInteger(json[@"comments"]) ||
+		    !IMActivityStrictInteger(json[@"likes"])) {
 			completion(0, 0, IMActivityError(_(@"The server returned invalid activity statistics.")));
 			return;
 		}
