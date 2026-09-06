@@ -661,7 +661,7 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 			return;
 		}
 		strongSelf.stepsView.text = [[NSString alloc] initWithData:updatedData encoding:NSUTF8StringEncoding];
-	}];
+	}]];
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
