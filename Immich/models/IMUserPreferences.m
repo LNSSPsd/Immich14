@@ -25,6 +25,9 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 @property (nonatomic, readwrite) BOOL emailEnabled;
 @property (nonatomic, readwrite) BOOL emailAlbumInvite;
 @property (nonatomic, readwrite) BOOL emailAlbumUpdate;
+@property (nonatomic, readwrite) BOOL gCastEnabled;
+@property (nonatomic, readwrite) NSInteger archiveSize;
+@property (nonatomic, readwrite) BOOL includeEmbeddedVideos;
 @property (nonatomic, readwrite) BOOL memoriesEnabled;
 @property (nonatomic, readwrite) NSInteger memoriesDuration;
 @property (nonatomic, readwrite) BOOL peopleEnabled;
@@ -37,6 +40,7 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 @property (nonatomic, readwrite) BOOL foldersEnabled;
 @property (nonatomic, readwrite) BOOL foldersSidebarWeb;
 @property (nonatomic, readwrite) BOOL ratingsEnabled;
+@property (nonatomic, readwrite) BOOL recentlyAddedSidebarWeb;
 @property (nonatomic, copy, readwrite) NSString *defaultAlbumAssetOrder;
 @end
 
@@ -50,6 +54,11 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 		_emailEnabled = IMPreferencesBool(email, @"enabled", NO);
 		_emailAlbumInvite = IMPreferencesBool(email, @"albumInvite", YES);
 		_emailAlbumUpdate = IMPreferencesBool(email, @"albumUpdate", YES);
+		NSDictionary *cast = IMPreferencesSection(_rawDictionary, @"cast");
+		_gCastEnabled = IMPreferencesBool(cast, @"gCastEnabled", NO);
+		NSDictionary *download = IMPreferencesSection(_rawDictionary, @"download");
+		_archiveSize = MAX(0, IMPreferencesInteger(download, @"archiveSize", 0));
+		_includeEmbeddedVideos = IMPreferencesBool(download, @"includeEmbeddedVideos", NO);
 
 		NSDictionary *memories = IMPreferencesSection(_rawDictionary, @"memories");
 		_memoriesEnabled = IMPreferencesBool(memories, @"enabled", YES);
@@ -69,6 +78,8 @@ static NSString *IMPreferencesString(NSDictionary *dictionary, NSString *key, NS
 		_foldersSidebarWeb = IMPreferencesBool(folders, @"sidebarWeb", YES);
 		NSDictionary *ratings = IMPreferencesSection(_rawDictionary, @"ratings");
 		_ratingsEnabled = IMPreferencesBool(ratings, @"enabled", YES);
+		NSDictionary *recentlyAdded = IMPreferencesSection(_rawDictionary, @"recentlyAdded");
+		_recentlyAddedSidebarWeb = IMPreferencesBool(recentlyAdded, @"sidebarWeb", YES);
 		NSDictionary *albums = IMPreferencesSection(_rawDictionary, @"albums");
 		_defaultAlbumAssetOrder = [IMPreferencesString(albums, @"defaultAssetOrder", @"desc") copy];
 	}

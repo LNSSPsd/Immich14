@@ -9,6 +9,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL emailEnabled;
 @property (nonatomic, readonly) BOOL emailAlbumInvite;
 @property (nonatomic, readonly) BOOL emailAlbumUpdate;
+@property (nonatomic, readonly) BOOL gCastEnabled;
+@property (nonatomic, readonly) NSInteger archiveSize;
+@property (nonatomic, readonly) BOOL includeEmbeddedVideos;
 @property (nonatomic, readonly) BOOL memoriesEnabled;
 @property (nonatomic, readonly) NSInteger memoriesDuration;
 @property (nonatomic, readonly) BOOL peopleEnabled;
@@ -21,6 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL foldersEnabled;
 @property (nonatomic, readonly) BOOL foldersSidebarWeb;
 @property (nonatomic, readonly) BOOL ratingsEnabled;
+@property (nonatomic, readonly) BOOL recentlyAddedSidebarWeb;
 @property (nonatomic, copy, readonly) NSString *defaultAlbumAssetOrder;
 
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary;

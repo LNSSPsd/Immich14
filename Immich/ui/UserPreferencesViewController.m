@@ -6,6 +6,7 @@
 typedef NS_ENUM(NSInteger, IMUserPreferencesSection) {
 	IMUserPreferencesSectionEmail = 0,
 	IMUserPreferencesSectionFeatures,
+	IMUserPreferencesSectionDownloads,
 	IMUserPreferencesSectionDefaults,
 	IMUserPreferencesSectionWebSidebar,
 	IMUserPreferencesSectionCount,
@@ -15,6 +16,8 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 	IMUserPreferenceToggleEmailEnabled = 100,
 	IMUserPreferenceToggleAlbumInvite,
 	IMUserPreferenceToggleAlbumUpdate,
+	IMUserPreferenceToggleCast,
+	IMUserPreferenceToggleEmbeddedVideos,
 	IMUserPreferenceToggleMemories,
 	IMUserPreferenceTogglePeople,
 	IMUserPreferenceToggleSharedLinks,
@@ -25,6 +28,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 	IMUserPreferenceToggleSharedLinksSidebar,
 	IMUserPreferenceToggleTagsSidebar,
 	IMUserPreferenceToggleFoldersSidebar,
+	IMUserPreferenceToggleRecentlyAddedSidebar,
 };
 
 @interface UserPreferencesViewController ()
@@ -154,8 +158,9 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 	switch (section) {
 		case IMUserPreferencesSectionEmail: return 3;
 		case IMUserPreferencesSectionFeatures: return 6;
+		case IMUserPreferencesSectionDownloads: return 3;
 		case IMUserPreferencesSectionDefaults: return 3;
-		case IMUserPreferencesSectionWebSidebar: return 4;
+		case IMUserPreferencesSectionWebSidebar: return 5;
 		default: return 0;
 	}
 }
@@ -164,6 +169,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 	switch (section) {
 		case IMUserPreferencesSectionEmail: return _(@"Email notifications");
 		case IMUserPreferencesSectionFeatures: return _(@"Library features");
+		case IMUserPreferencesSectionDownloads: return _(@"Playback and downloads");
 		case IMUserPreferencesSectionDefaults: return _(@"Defaults");
 		case IMUserPreferencesSectionWebSidebar: return _(@"Web sidebar");
 		default: return nil;
@@ -172,6 +178,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if (section == IMUserPreferencesSectionEmail) return _(@"Email delivery also depends on the server SMTP configuration.");
+	if (section == IMUserPreferencesSectionDownloads) return _(@"Download archive limits and embedded-video behavior are controlled by the server.");
 	if (section == IMUserPreferencesSectionWebSidebar) return _(@"These switches affect the Immich web sidebar for your account.");
 	return nil;
 }
@@ -199,6 +206,12 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 				case 4: return [self switchCell:_(@"Ratings") detail:_(@"Enable star ratings.") on:p.ratingsEnabled tag:IMUserPreferenceToggleRatings enabled:YES];
 				default: return [self switchCell:_(@"Folders") detail:_(@"Enable folder browsing.") on:p.foldersEnabled tag:IMUserPreferenceToggleFolders enabled:YES];
 			}
+		case IMUserPreferencesSectionDownloads:
+			switch (indexPath.row) {
+				case 0: return [self switchCell:_(@"Google Cast") detail:_(@"Allow casting to compatible devices.") on:p.gCastEnabled tag:IMUserPreferenceToggleCast enabled:YES];
+				case 1: return [self switchCell:_(@"Embedded videos") detail:_(@"Include embedded videos in downloads.") on:p.includeEmbeddedVideos tag:IMUserPreferenceToggleEmbeddedVideos enabled:YES];
+				default: return [self valueCell:_(@"Download archive size") detail:p.archiveSize > 0 ? [NSString stringWithFormat:_(@"%ld bytes"), (long)p.archiveSize] : _(@"Server default")];
+			}
 		case IMUserPreferencesSectionDefaults:
 			if (indexPath.row == 0) return [self valueCell:_(@"Album photo order") detail:[p.defaultAlbumAssetOrder isEqualToString:@"asc"] ? _(@"Oldest first") : _(@"Newest first")];
 			if (indexPath.row == 1) return [self valueCell:_(@"Memory duration") detail:[NSString stringWithFormat:_(@"%ld seconds"), (long)p.memoriesDuration]];
@@ -208,7 +221,8 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 				case 0: return [self switchCell:_(@"People in sidebar") detail:nil on:p.peopleSidebarWeb tag:IMUserPreferenceTogglePeopleSidebar enabled:p.peopleEnabled];
 				case 1: return [self switchCell:_(@"Shared links in sidebar") detail:nil on:p.sharedLinksSidebarWeb tag:IMUserPreferenceToggleSharedLinksSidebar enabled:p.sharedLinksEnabled];
 				case 2: return [self switchCell:_(@"Tags in sidebar") detail:nil on:p.tagsSidebarWeb tag:IMUserPreferenceToggleTagsSidebar enabled:p.tagsEnabled];
-				default: return [self switchCell:_(@"Folders in sidebar") detail:nil on:p.foldersSidebarWeb tag:IMUserPreferenceToggleFoldersSidebar enabled:p.foldersEnabled];
+				case 3: return [self switchCell:_(@"Folders in sidebar") detail:nil on:p.foldersSidebarWeb tag:IMUserPreferenceToggleFoldersSidebar enabled:p.foldersEnabled];
+				default: return [self switchCell:_(@"Recently added in sidebar") detail:nil on:p.recentlyAddedSidebarWeb tag:IMUserPreferenceToggleRecentlyAddedSidebar enabled:YES];
 			}
 		default: return [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 	}
@@ -222,6 +236,8 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 		case IMUserPreferenceToggleEmailEnabled: section = @"emailNotifications"; key = @"enabled"; break;
 		case IMUserPreferenceToggleAlbumInvite: section = @"emailNotifications"; key = @"albumInvite"; break;
 		case IMUserPreferenceToggleAlbumUpdate: section = @"emailNotifications"; key = @"albumUpdate"; break;
+		case IMUserPreferenceToggleCast: section = @"cast"; key = @"gCastEnabled"; break;
+		case IMUserPreferenceToggleEmbeddedVideos: section = @"download"; key = @"includeEmbeddedVideos"; break;
 		case IMUserPreferenceToggleMemories: section = @"memories"; key = @"enabled"; break;
 		case IMUserPreferenceTogglePeople: section = @"people"; key = @"enabled"; break;
 		case IMUserPreferenceToggleSharedLinks: section = @"sharedLinks"; key = @"enabled"; break;
@@ -232,6 +248,7 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 		case IMUserPreferenceToggleSharedLinksSidebar: section = @"sharedLinks"; key = @"sidebarWeb"; break;
 		case IMUserPreferenceToggleTagsSidebar: section = @"tags"; key = @"sidebarWeb"; break;
 		case IMUserPreferenceToggleFoldersSidebar: section = @"folders"; key = @"sidebarWeb"; break;
+		case IMUserPreferenceToggleRecentlyAddedSidebar: section = @"recentlyAdded"; key = @"sidebarWeb"; break;
 		default: return;
 	}
 	[self updateSection:section values:@{key: @(sender.isOn)}];
@@ -268,6 +285,27 @@ typedef NS_ENUM(NSInteger, IMUserPreferenceToggle) {
 			NSInteger value = alert.textFields.firstObject.text.integerValue;
 			if (value < 1 || value > 1000) { [weakSelf showUpdateError:[NSError errorWithDomain:IMUserPreferencesApi.class.description code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a threshold between 1 and 1000.")}]]; return; }
 			[weakSelf updateSection:@"people" values:@{ @"minimumFaces": @(value) }];
+		}]];
+		[self presentViewController:alert animated:YES completion:nil];
+		return;
+	}
+	if (indexPath.section == IMUserPreferencesSectionDownloads && indexPath.row == 2) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Download archive size") message:_(@"Enter the maximum archive size in bytes. The value must be between 1 and 9007199254740991.") preferredStyle:UIAlertControllerStyleAlert];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+			field.keyboardType = UIKeyboardTypeNumberPad;
+			field.text = self.preferences.archiveSize > 0 ? [NSString stringWithFormat:@"%ld", (long)self.preferences.archiveSize] : @"";
+			field.placeholder = _(@"Archive size in bytes");
+		}];
+		__weak typeof(self) weakSelf = self;
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"Save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			NSString *text = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+			unsigned long long value = text.longLongValue;
+			if (!text.length || value < 1 || value > 9007199254740991ULL || ![text isEqualToString:[NSString stringWithFormat:@"%llu", value]]) {
+				[weakSelf showUpdateError:[NSError errorWithDomain:IMUserPreferencesApi.class.description code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a valid archive size between 1 and 9007199254740991 bytes.")}]];
+				return;
+			}
+			[weakSelf updateSection:@"download" values:@{ @"archiveSize": @(value) }];
 		}]];
 		[self presentViewController:alert animated:YES completion:nil];
 	}
