@@ -125,10 +125,10 @@ extern NSString *const IMAssetMediaSizePreview;
 + (void)ocrLinesForAssetId:(NSString *)assetId
                  completion:(void (^)(NSArray<IMOcrLine *> *_Nullable lines, NSError *_Nullable error))completion;
 
-+ (void)bulkUploadCheckWithItems:(NSArray<NSDictionary<NSString *, NSString *> *> *)items
-                       completion:(void (^)(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
-                                             NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
-                                             NSError *_Nullable error))completion;
++ (nullable NSURLSessionTask *)bulkUploadCheckWithItems:(NSArray<NSDictionary<NSString *, NSString *> *> *)items
+                                              completion:(void (^)(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
+                                                                    NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
+                                                                    NSError *_Nullable error))completion;
 
 + (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
                                        filename:(NSString *)filename

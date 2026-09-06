@@ -82,6 +82,7 @@ static NSError *IMSyncSessionChangedError(void) {
 @property (nonatomic, copy, nullable) NSString *runSessionFingerprint;
 @property (nonatomic) BOOL uploadsEnabledForRun;
 @property (nonatomic, strong, nullable) NSObject *runToken;
+@property (nonatomic, strong, nullable) NSURLSessionTask *activeNetworkTask;
 - (BOOL)ensureCurrentRunToken:(NSObject *)token;
 - (BOOL)ensureMutableRunToken:(NSObject *)token;
 - (void)processNextForToken:(NSObject *)token;
@@ -285,6 +286,8 @@ static NSError *IMSyncSessionChangedError(void) {
 		return;
 	}
 	self.cancelled = YES;
+	[self.activeNetworkTask cancel];
+	self.activeNetworkTask = nil;
 	[[IMPhotoLibrary shared] cancelOutstandingRequests];
 	NSObject *runToken = self.runToken;
 	dispatch_async(dispatch_get_main_queue(), ^{
@@ -352,6 +355,8 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.uploadsEnabledForRun = NO;
 	self.runToken = nil;
 	self.assetFetchResult = nil;
+	[self.activeNetworkTask cancel];
+	self.activeNetworkTask = nil;
 	[[IMPhotoLibrary shared] cancelOutstandingRequests];
 	if (completion) {
 		completion(error);
@@ -499,7 +504,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	}
 
 	__weak typeof(self) weakSelf = self;
-	[IMAssetApi bulkUploadCheckWithItems:items
+	self.activeNetworkTask = [IMAssetApi bulkUploadCheckWithItems:items
 	                           completion:^(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
 	                                        NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
 	                                        NSError *_Nullable error) {
@@ -507,6 +512,7 @@ static NSError *IMSyncSessionChangedError(void) {
 		    if (!strongSelf) {
 			    return;
 		    }
+		    strongSelf.activeNetworkTask = nil;
 			if (![strongSelf ensureMutableRunToken:runToken]) {
 			    return;
 		    }
@@ -653,16 +659,17 @@ static NSError *IMSyncSessionChangedError(void) {
 				    if (![s3 ensureMutableRunToken:runToken]) {
 					    return;
 				    }
-				    [IMAssetApi uploadAssetData:data
+				    s3.activeNetworkTask = [IMAssetApi uploadAssetData:data
 				                        filename:filename
 				                   fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
 				                  fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
 				                livePhotoVideoId:livePhotoVideoId
 				                      completion:^(NSString *_Nullable uploadedAssetId, NSError *_Nullable uploadError) {
 					    typeof(self) s2 = weakSelf;
-							    if (!s2) {
-								    return;
-							    }
+						    if (!s2) {
+							    return;
+						    }
+					    s2.activeNetworkTask = nil;
 							    if (![s2 ensureMutableRunToken:runToken]) {
 								    return;
 							    }
@@ -712,12 +719,13 @@ static NSError *IMSyncSessionChangedError(void) {
 				    completion(nil);
 				    return;
 			    }
-			    [IMAssetApi uploadAssetData:data
+			    self.activeNetworkTask = [IMAssetApi uploadAssetData:data
 			                        filename:filename ?: @"live.mov"
 			                   fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
 			                  fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
 			                livePhotoVideoId:nil
 			                      completion:^(NSString *_Nullable videoAssetId, NSError *_Nullable uploadError) {
+				    self.activeNetworkTask = nil;
 				    if (![self ensureMutableRunToken:runToken]) {
 					    return;
 				    }

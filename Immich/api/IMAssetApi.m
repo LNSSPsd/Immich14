@@ -941,15 +941,15 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	    }];
 }
 
-+ (void)bulkUploadCheckWithItems:(NSArray<NSDictionary<NSString *, NSString *> *> *)items
-                       completion:(void (^)(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
-                                             NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
-                                             NSError *_Nullable error))completion {
++ (nullable NSURLSessionTask *)bulkUploadCheckWithItems:(NSArray<NSDictionary<NSString *, NSString *> *> *)items
+                                              completion:(void (^)(NSDictionary<NSString *, NSString *> *_Nullable actionsById,
+                                                                    NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
+                                                                    NSError *_Nullable error))completion {
 	if (!IMAssetBulkCheckItemsAreValid(items)) {
 		completion(nil, nil, IMAssetAPIError(_(@"At least one valid upload-check item is required.")));
-		return;
+		return nil;
 	}
-	[[IMApiClient shared] POST:@"/assets/bulk-upload-check"
+	return [[IMApiClient shared] POST:@"/assets/bulk-upload-check"
 	                       body:@{ @"assets": items }
 	                 completion:^(id _Nullable json, NSError *_Nullable error) {
 		    if (error) {
