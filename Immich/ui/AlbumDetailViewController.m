@@ -262,7 +262,8 @@ static const CGFloat kCellSpacing = 2;
 	                                 handler:^(UIAlertAction *action) {
 	    ActivityViewController *activity = [ActivityViewController activityViewControllerForAlbumId:weakSelf.album.albumId
 	                                                                                           assetId:nil
-	                                                                                             title:weakSelf.album.name];
+	                                                                                             title:weakSelf.album.name
+                                                                                        albumOwner:[weakSelf ownsAlbum]];
 	    [weakSelf.navigationController pushViewController:activity animated:YES];
 }]];
 	if (self.ownsAlbum) [sheet addAction:[UIAlertAction actionWithTitle:_(@"Delete Album")
@@ -718,7 +719,8 @@ static const CGFloat kCellSpacing = 2;
 	                                         handler:^(UIAlertAction *action) {
 	    ActivityViewController *activity = [ActivityViewController activityViewControllerForAlbumId:weakSelf.album.albumId
 	                                                                                           assetId:asset.assetId
-	                                                                                             title:_(@"Photo Activity")];
+	                                                                                             title:_(@"Photo Activity")
+                                                                                        albumOwner:[weakSelf ownsAlbum]];
 	    [weakSelf.navigationController pushViewController:activity animated:YES];
 }]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];

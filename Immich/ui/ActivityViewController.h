@@ -8,6 +8,11 @@ NS_ASSUME_NONNULL_BEGIN
                                            assetId:(nullable NSString *)assetId
                                              title:(nullable NSString *)title;
 
++ (instancetype)activityViewControllerForAlbumId:(NSString *)albumId
+                                           assetId:(nullable NSString *)assetId
+                                             title:(nullable NSString *)title
+                                        albumOwner:(BOOL)albumOwner;
+
 @end
 
 NS_ASSUME_NONNULL_END

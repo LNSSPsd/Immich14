@@ -11,6 +11,7 @@
 @property (nonatomic, copy) NSArray<IMActivity *> *activities;
 @property (nonatomic) NSInteger commentsCount;
 @property (nonatomic) NSInteger likesCount;
+@property (nonatomic) BOOL albumOwner;
 @property (nonatomic) BOOL loading;
 @property (nonatomic) NSUInteger generation;
 @property (nonatomic, strong) UIRefreshControl *refresh;
@@ -21,10 +22,18 @@
 + (instancetype)activityViewControllerForAlbumId:(NSString *)albumId
                                            assetId:(NSString *)assetId
                                              title:(NSString *)title {
+	return [self activityViewControllerForAlbumId:albumId assetId:assetId title:title albumOwner:NO];
+}
+
++ (instancetype)activityViewControllerForAlbumId:(NSString *)albumId
+                                           assetId:(NSString *)assetId
+                                             title:(NSString *)title
+                                        albumOwner:(BOOL)albumOwner {
 	ActivityViewController *controller = [[self alloc] initWithStyle:UITableViewStyleInsetGrouped];
 	controller.albumId = albumId ?: @"";
 	controller.assetId = assetId;
 	controller.title = title.length ? title : _(@"Activity");
+	controller.albumOwner = albumOwner;
 	return controller;
 }
 
@@ -252,7 +261,7 @@
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (indexPath.section != 1 || indexPath.row >= (NSInteger)self.activities.count) return NO;
 	IMActivity *activity = self.activities[indexPath.row];
-	return [activity.user.userId isEqualToString:IMSession.shared.userId];
+	return self.albumOwner || [activity.user.userId isEqualToString:IMSession.shared.userId];
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
