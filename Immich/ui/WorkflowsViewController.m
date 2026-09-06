@@ -20,6 +20,44 @@ static BOOL IMWorkflowSchemaNumber(id value) {
 	return [value isKindOfClass:[NSNumber class]] && !IMWorkflowSchemaBoolean(value) && isfinite([(NSNumber *)value doubleValue]);
 }
 
+static NSString *IMWorkflowSchemaTypeDescription(NSDictionary *schema) {
+	if (![schema isKindOfClass:[NSDictionary class]]) return _(@"value");
+	BOOL isArray = IMWorkflowSchemaBoolean(schema[@"array"]) && [schema[@"array"] boolValue];
+	NSString *type = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : @"object";
+	if (isArray) return [NSString stringWithFormat:_(@"array of %@"), type];
+	return type;
+}
+
+static NSString *IMWorkflowSchemaFieldDescription(NSDictionary *schema) {
+	if (![schema isKindOfClass:[NSDictionary class]]) return _(@"value");
+	NSMutableString *description = [NSMutableString stringWithString:IMWorkflowSchemaTypeDescription(schema)];
+	id enumeration = schema[@"enum"];
+	if ([enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0) {
+		NSMutableArray<NSString *> *values = [NSMutableArray array];
+		for (id value in (NSArray *)enumeration) {
+			if ([value isKindOfClass:[NSString class]]) [values addObject:value];
+		}
+		if (values.count == [enumeration count]) [description appendFormat:_(@", one of %@"), [values componentsJoinedByString:@", "]];
+	}
+	return [description copy];
+}
+
+static NSString *IMWorkflowSchemaGuidance(NSDictionary *schema) {
+	if (![schema isKindOfClass:[NSDictionary class]]) return nil;
+	NSDictionary *properties = [schema[@"properties"] isKindOfClass:[NSDictionary class]] ? schema[@"properties"] : nil;
+	NSArray *required = [schema[@"required"] isKindOfClass:[NSArray class]] ? schema[@"required"] : nil;
+	NSMutableArray<NSString *> *requiredFields = [NSMutableArray array];
+	for (id key in required) {
+		if (![key isKindOfClass:[NSString class]]) continue;
+		NSDictionary *fieldSchema = [properties[key] isKindOfClass:[NSDictionary class]] ? properties[key] : nil;
+		NSString *detail = fieldSchema ? IMWorkflowSchemaFieldDescription(fieldSchema) : _(@"value");
+		[requiredFields addObject:[NSString stringWithFormat:_(@"%@ (%@)"), key, detail]];
+	}
+	if (!requiredFields.count) return nil;
+	return [NSString stringWithFormat:_(@"Required config fields: %@. Edit the JSON below to provide these values before saving."),
+	        [requiredFields componentsJoinedByString:@", "]];
+}
+
 static BOOL IMWorkflowSchemaValidateValue(id value,
 	                                         NSDictionary *schema,
 	                                         NSString *path,
@@ -128,8 +166,10 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 @property (nonatomic, strong) UITextField *triggerField;
 @property (nonatomic, strong) UISwitch *enabledSwitch;
 @property (nonatomic, strong) UITextView *stepsView;
+@property (nonatomic, strong) UIButton *insertMethodButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic) BOOL saving;
+@property (nonatomic) BOOL loadingMethods;
 @end
 
 @implementation IMWorkflowEditorViewController
@@ -226,6 +266,15 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 	self.stepsView.text = [self stepsJSONString:self.workflow.steps ?: @[]];
 	[stack addArrangedSubview:self.stepsView];
 
+	self.insertMethodButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.insertMethodButton.translatesAutoresizingMaskIntoConstraints = NO;
+	self.insertMethodButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+	[self.insertMethodButton setTitle:_(@"Insert plugin step…") forState:UIControlStateNormal];
+	self.insertMethodButton.accessibilityHint = _(@"Loads enabled plugin methods for the selected trigger and appends one to the raw JSON.");
+	[self.insertMethodButton addTarget:self action:@selector(insertMethodTapped) forControlEvents:UIControlEventTouchUpInside];
+	[self.insertMethodButton.heightAnchor constraintGreaterThanOrEqualToConstant:44.0].active = YES;
+	[stack addArrangedSubview:self.insertMethodButton];
+
 	UILabel *hint = [self labelWithText:_(@"Each step needs a method such as plugin#method. Config must be an object or null; enabled defaults to true. Config values are checked against the selected plugin method schema before saving.")];
 	hint.numberOfLines = 0;
 	if (@available(iOS 13.0, *)) hint.textColor = UIColor.secondaryLabelColor;
@@ -277,6 +326,104 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Invalid workflow") message:message preferredStyle:UIAlertControllerStyleAlert];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
 	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)insertMethodTapped {
+	if (self.saving || self.loadingMethods) return;
+	NSString *trigger = [self.triggerField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+	if (![trigger isEqualToString:IMWorkflowAssetCreateTrigger] && ![trigger isEqualToString:IMWorkflowMetadataTrigger]) {
+		[self showValidation:_(@"Use AssetCreate or AssetMetadataExtraction as the trigger before choosing a plugin method.")];
+		return;
+	}
+	self.loadingMethods = YES;
+	self.insertMethodButton.enabled = NO;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+	[self.spinner startAnimating];
+	__weak typeof(self) weakSelf = self;
+	[IMPluginApi pluginMethodsWithDescription:nil
+	                                  enabled:@YES
+	                                       id:nil
+	                                     name:nil
+	                               pluginName:nil
+	                            pluginVersion:nil
+	                                    title:nil
+	                                  trigger:trigger
+	                                     type:nil
+	                               completion:^(NSArray<IMPluginMethod *> *methods, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			IMWorkflowEditorViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.loadingMethods = NO;
+			strongSelf.insertMethodButton.enabled = YES;
+			strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
+			[strongSelf.spinner stopAnimating];
+			if (error || !methods) {
+				[strongSelf showValidation:error.localizedDescription.length ? error.localizedDescription : _(@"Couldn't load plugin methods. Check the server connection and try again.")];
+				return;
+			}
+			if (!methods.count) {
+				[strongSelf showValidation:_(@"No enabled plugin methods support this trigger.")];
+				return;
+			}
+			[strongSelf presentMethodPicker:methods];
+		});
+	}];
+}
+
+- (void)presentMethodPicker:(NSArray<IMPluginMethod *> *)methods {
+	NSArray<IMPluginMethod *> *sorted = [methods sortedArrayUsingComparator:^NSComparisonResult(IMPluginMethod *first, IMPluginMethod *second) {
+		NSString *firstName = first.title.length ? first.title : first.key;
+		NSString *secondName = second.title.length ? second.title : second.key;
+		return [firstName localizedCaseInsensitiveCompare:secondName];
+	}];
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Insert plugin step")
+	                                                                  message:_(@"Choose an enabled method for this workflow trigger.")
+	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	for (IMPluginMethod *method in sorted) {
+		NSString *name = method.title.length ? method.title : method.name;
+		NSString *title = [NSString stringWithFormat:_(@"%@ (%@)"), name.length ? name : method.key, method.key];
+		[sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			IMWorkflowEditorViewController *strongSelf = weakSelf;
+			if (strongSelf) [strongSelf appendMethod:method];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	sheet.popoverPresentationController.sourceView = self.insertMethodButton;
+	sheet.popoverPresentationController.sourceRect = self.insertMethodButton.bounds;
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)appendMethod:(IMPluginMethod *)method {
+	if (!method.key.length) return;
+	NSString *text = [self.stepsView.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+	if (!text.length) text = @"[]";
+	NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+	NSError *error = nil;
+	id json = data ? [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&error] : nil;
+	if (![json isKindOfClass:[NSArray class]]) {
+		[self showValidation:error.localizedDescription.length ? error.localizedDescription : _(@"Fix the steps JSON before inserting a plugin method.")];
+		return;
+	}
+	NSMutableArray *steps = [NSMutableArray arrayWithArray:(NSArray *)json];
+	NSDictionary *schema = method.schema;
+	[steps addObject:@{
+		@"method": method.key,
+		@"config": schema.count ? @{} : [NSNull null],
+		@"enabled": @YES,
+	}];
+	NSData *updatedData = [NSJSONSerialization dataWithJSONObject:steps options:NSJSONWritingPrettyPrinted error:&error];
+	if (!updatedData) {
+		[self showValidation:error.localizedDescription.length ? error.localizedDescription : _(@"Couldn't update the steps JSON.")];
+		return;
+	}
+	self.stepsView.text = [[NSString alloc] initWithData:updatedData encoding:NSUTF8StringEncoding];
+	NSString *guidance = IMWorkflowSchemaGuidance(schema);
+	if (guidance.length) {
+		UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Plugin step added") message:guidance preferredStyle:UIAlertControllerStyleAlert];
+		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
+		[self presentViewController:alert animated:YES completion:nil];
+	}
 }
 
 - (void)validateStepMethods:(NSArray<IMWorkflowStep *> *)steps
