@@ -167,6 +167,7 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 @property (nonatomic, strong) UISwitch *enabledSwitch;
 @property (nonatomic, strong) UITextView *stepsView;
 @property (nonatomic, strong) UIButton *insertMethodButton;
+@property (nonatomic, strong) UIButton *configureMethodButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic) BOOL saving;
 @property (nonatomic) BOOL loadingMethods;
@@ -274,6 +275,15 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 	[self.insertMethodButton addTarget:self action:@selector(insertMethodTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.insertMethodButton.heightAnchor constraintGreaterThanOrEqualToConstant:44.0].active = YES;
 	[stack addArrangedSubview:self.insertMethodButton];
+
+	self.configureMethodButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	self.configureMethodButton.translatesAutoresizingMaskIntoConstraints = NO;
+	self.configureMethodButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+	[self.configureMethodButton setTitle:_(@"Configure plugin step…") forState:UIControlStateNormal];
+	self.configureMethodButton.accessibilityHint = _(@"Opens scalar fields for a plugin step while retaining raw JSON for advanced values.");
+	[self.configureMethodButton addTarget:self action:@selector(configureMethodTapped) forControlEvents:UIControlEventTouchUpInside];
+	[self.configureMethodButton.heightAnchor constraintGreaterThanOrEqualToConstant:44.0].active = YES;
+	[stack addArrangedSubview:self.configureMethodButton];
 
 	UILabel *hint = [self labelWithText:_(@"Each step needs a method such as plugin#method. Config must be an object or null; enabled defaults to true. Config values are checked against the selected plugin method schema before saving.")];
 	hint.numberOfLines = 0;
@@ -424,6 +434,235 @@ typedef void (^IMWorkflowEditorSavedBlock)(IMWorkflow *workflow);
 		[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
 		[self presentViewController:alert animated:YES completion:nil];
 	}
+}
+
+static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
+	NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+	if (trimmed.length == 0) return nil;
+	NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+	double number = 0;
+	if (![scanner scanDouble:&number] || !scanner.isAtEnd || !isfinite(number)) return nil;
+	if (integer && floor(number) != number) return nil;
+	return @(number);
+}
+
+- (NSMutableArray<NSMutableDictionary *> *_Nullable)rawStepDictionariesWithError:(NSString *_Nullable __autoreleasing *)message {
+	NSString *text = [self.stepsView.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+	if (text.length == 0) text = @"[]";
+	NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+	NSError *jsonError = nil;
+	id json = data ? [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&jsonError] : nil;
+	if (![json isKindOfClass:[NSArray class]]) {
+		if (message) *message = jsonError.localizedDescription.length ? jsonError.localizedDescription : _(@"Steps must be a JSON array.");
+		return nil;
+	}
+	NSMutableArray<NSMutableDictionary *> *steps = [NSMutableArray arrayWithCapacity:[(NSArray *)json count]];
+	NSUInteger index = 0;
+	for (id value in (NSArray *)json) {
+		if (![value isKindOfClass:[NSDictionary class]]) {
+			if (message) *message = [NSString stringWithFormat:_(@"Step %lu must be an object."), (unsigned long)(index + 1)];
+			return nil;
+		}
+		id method = ((NSDictionary *)value)[@"method"];
+		if (![method isKindOfClass:[NSString class]] || [(NSString *)method stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0) {
+			if (message) *message = [NSString stringWithFormat:_(@"Step %lu needs a method."), (unsigned long)(index + 1)];
+			return nil;
+		}
+		[steps addObject:[(NSDictionary *)value mutableCopy]];
+		index++;
+	}
+	return steps;
+}
+
+- (void)configureMethodTapped {
+	if (self.saving || self.loadingMethods) return;
+	NSString *trigger = [self.triggerField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+	if (![trigger isEqualToString:IMWorkflowAssetCreateTrigger] && ![trigger isEqualToString:IMWorkflowMetadataTrigger]) {
+		[self showValidation:_(@"Use AssetCreate or AssetMetadataExtraction as the trigger before configuring a plugin method.")];
+		return;
+	}
+	NSString *stepError = nil;
+	NSMutableArray<NSMutableDictionary *> *steps = [self rawStepDictionariesWithError:&stepError];
+	if (!steps) {
+		[self showValidation:stepError ?: _(@"Fix the steps JSON before configuring a plugin method.")];
+		return;
+	}
+	if (!steps.count) {
+		[self showValidation:_(@"Insert a plugin step before configuring it.")];
+		return;
+	}
+	self.loadingMethods = YES;
+	self.configureMethodButton.enabled = NO;
+	self.insertMethodButton.enabled = NO;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+	[self.spinner startAnimating];
+	__weak typeof(self) weakSelf = self;
+	[IMPluginApi pluginMethodsWithDescription:nil
+	                                  enabled:@YES
+	                                       id:nil
+	                                     name:nil
+	                               pluginName:nil
+	                            pluginVersion:nil
+	                                    title:nil
+	                                  trigger:trigger
+	                                     type:nil
+	                               completion:^(NSArray<IMPluginMethod *> *methods, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			IMWorkflowEditorViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.loadingMethods = NO;
+			strongSelf.configureMethodButton.enabled = YES;
+			strongSelf.insertMethodButton.enabled = YES;
+			strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
+			[strongSelf.spinner stopAnimating];
+			if (error || !methods) {
+				[strongSelf showValidation:error.localizedDescription.length ? error.localizedDescription : _(@"Couldn't load plugin methods. Check the server connection and try again.")];
+				return;
+			}
+			[strongSelf presentStepConfigurationPicker:steps methods:methods];
+		});
+	}];
+}
+
+- (void)presentStepConfigurationPicker:(NSArray<NSMutableDictionary *> *)steps
+	                              methods:(NSArray<IMPluginMethod *> *)methods {
+	NSMutableDictionary<NSString *, IMPluginMethod *> *methodsByKey = [NSMutableDictionary dictionaryWithCapacity:methods.count];
+	for (IMPluginMethod *method in methods) if (method.key.length > 0) methodsByKey[method.key] = method;
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Configure plugin step")
+	                                                                  message:_(@"Choose a step. Scalar schema fields can be edited here; nested and array values remain available in raw JSON.")
+	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	for (NSUInteger index = 0; index < steps.count; index++) {
+		NSDictionary *step = steps[index];
+		NSString *methodKey = [step[@"method"] isKindOfClass:[NSString class]] ? step[@"method"] : @"";
+		IMPluginMethod *method = methodsByKey[methodKey];
+		NSString *title = [NSString stringWithFormat:_(@"Step %lu: %@"), (unsigned long)(index + 1), methodKey];
+		if (!method) title = [title stringByAppendingString:_(@" (unavailable)")];
+		[sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			IMWorkflowEditorViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			if (!method) {
+				[strongSelf showValidation:[NSString stringWithFormat:_(@"Step %lu uses an unavailable plugin method."), (unsigned long)(index + 1)]];
+				return;
+			}
+			[strongSelf presentSchemaEditorForStepAtIndex:index method:method];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	sheet.popoverPresentationController.sourceView = self.configureMethodButton;
+	sheet.popoverPresentationController.sourceRect = self.configureMethodButton.bounds;
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)presentSchemaEditorForStepAtIndex:(NSUInteger)stepIndex method:(IMPluginMethod *)method {
+	NSDictionary *schema = method.schema;
+	NSDictionary *properties = [schema[@"properties"] isKindOfClass:[NSDictionary class]] ? schema[@"properties"] : nil;
+	NSString *schemaType = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : @"object";
+	if (![schemaType isEqualToString:@"object"] || properties.count == 0) {
+		[self showValidation:_(@"This plugin has no editable top-level scalar fields. Use the raw JSON editor for its configuration.")];
+		return;
+	}
+	NSMutableArray<NSString *> *keys = [NSMutableArray array];
+	for (NSString *key in properties) {
+		NSDictionary *fieldSchema = [properties[key] isKindOfClass:[NSDictionary class]] ? properties[key] : nil;
+		NSString *type = [fieldSchema[@"type"] isKindOfClass:[NSString class]] ? fieldSchema[@"type"] : @"";
+		BOOL array = IMWorkflowSchemaBoolean(fieldSchema[@"array"]) && [fieldSchema[@"array"] boolValue];
+		if (!array && ([@[ @"string", @"number", @"integer", @"boolean" ] containsObject:type])) [keys addObject:key];
+	}
+	[keys sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+	if (!keys.count) {
+		[self showValidation:_(@"This plugin's fields are nested or arrays. Use the raw JSON editor for its configuration.")];
+		return;
+	}
+	NSString *rawError = nil;
+	NSMutableArray<NSMutableDictionary *> *steps = [self rawStepDictionariesWithError:&rawError];
+	if (!steps || stepIndex >= steps.count) {
+		[self showValidation:rawError ?: _(@"The selected workflow step is no longer available.")];
+		return;
+	}
+	NSMutableDictionary *config = [steps[stepIndex][@"config"] isKindOfClass:[NSDictionary class]]
+	    ? [steps[stepIndex][@"config"] mutableCopy]
+	    : [NSMutableDictionary dictionary];
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:method.title.length ? method.title : method.key
+	                                                                 message:_(@"Enter scalar values. Required fields and schema limits are checked before the workflow is saved.")
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	for (NSString *key in keys) {
+		NSDictionary *fieldSchema = properties[key];
+		NSString *type = fieldSchema[@"type"];
+		id current = config[key];
+		NSString *initial = @"";
+		if ([type isEqualToString:@"boolean"] && IMWorkflowSchemaBoolean(current)) initial = [current boolValue] ? @"true" : @"false";
+		else if ([current isKindOfClass:[NSString class]]) initial = current;
+		else if ([current isKindOfClass:[NSNumber class]]) initial = [current stringValue];
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+			field.placeholder = key;
+			field.text = initial;
+			field.clearButtonMode = UITextFieldViewModeWhileEditing;
+			field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+			field.autocorrectionType = UITextAutocorrectionTypeNo;
+			field.accessibilityLabel = key;
+			id enumeration = fieldSchema[@"enum"];
+			if ([enumeration isKindOfClass:[NSArray class]] && enumeration.count > 0) {
+				NSMutableArray<NSString *> *choices = [NSMutableArray array];
+				for (id choice in enumeration) if ([choice isKindOfClass:[NSString class]]) [choices addObject:choice];
+				if (choices.count == enumeration.count) field.placeholder = [NSString stringWithFormat:_(@"%@ (%@)"), key, [choices componentsJoinedByString:@", "]];
+			}
+		}];
+	}
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Apply") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		IMWorkflowEditorViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSMutableDictionary *updatedConfig = [config mutableCopy];
+		NSArray *required = [schema[@"required"] isKindOfClass:[NSArray class]] ? schema[@"required"] : @[];
+		for (NSUInteger index = 0; index < keys.count; index++) {
+			NSString *key = keys[index];
+			NSDictionary *fieldSchema = properties[key];
+			NSString *type = fieldSchema[@"type"];
+			NSString *text = [alert.textFields[index].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+			BOOL isRequired = [required containsObject:key];
+			if (text.length == 0) {
+				if (isRequired) {
+					[strongSelf showValidation:[NSString stringWithFormat:_(@"%@ is required."), key]];
+					return;
+				}
+				[updatedConfig removeObjectForKey:key];
+				continue;
+			}
+			if ([type isEqualToString:@"string"]) {
+				updatedConfig[key] = text;
+			} else if ([type isEqualToString:@"number"] || [type isEqualToString:@"integer"]) {
+				NSNumber *number = IMWorkflowSchemaNumberFromText(text, [type isEqualToString:@"integer"]);
+				if (!number) {
+					[strongSelf showValidation:[NSString stringWithFormat:_(@"%@ must be a valid %@."), key, type]];
+					return;
+				}
+				updatedConfig[key] = number;
+			} else if ([type isEqualToString:@"boolean"]) {
+				if ([text.lowercaseString isEqualToString:@"true"]) updatedConfig[key] = @YES;
+				else if ([text.lowercaseString isEqualToString:@"false"]) updatedConfig[key] = @NO;
+				else {
+					[strongSelf showValidation:[NSString stringWithFormat:_(@"%@ must be true or false."), key]];
+					return;
+				}
+			}
+		}
+		NSString *schemaError = nil;
+		if (!IMWorkflowSchemaValidateValue(updatedConfig, schema, _(@"config"), &schemaError)) {
+			[strongSelf showValidation:schemaError ?: _(@"The plugin configuration does not match its schema.")];
+			return;
+		}
+		steps[stepIndex][@"config"] = updatedConfig;
+		NSError *jsonError = nil;
+		NSData *updatedData = [NSJSONSerialization dataWithJSONObject:steps options:NSJSONWritingPrettyPrinted error:&jsonError];
+		if (!updatedData) {
+			[strongSelf showValidation:jsonError.localizedDescription.length ? jsonError.localizedDescription : _(@"Couldn't update the steps JSON.")];
+			return;
+		}
+		strongSelf.stepsView.text = [[NSString alloc] initWithData:updatedData encoding:NSUTF8StringEncoding];
+	}];
+	[self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)validateStepMethods:(NSArray<IMWorkflowStep *> *)steps
