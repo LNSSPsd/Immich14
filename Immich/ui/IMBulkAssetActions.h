@@ -29,6 +29,10 @@ presentingController:(UIViewController *)presenter
              presentingController:(UIViewController *)presenter
                         completion:(void (^)(BOOL success))completion;
 
++ (void)presentMetadataPickerForAssets:(NSArray<IMAsset *> *)assets
+                  presentingController:(UIViewController *)presenter
+                             completion:(void (^)(BOOL success))completion;
+
 + (void)presentVisibilityPickerForAssets:(NSArray<IMAsset *> *)assets
                     presentingController:(UIViewController *)presenter
                                completion:(void (^)(BOOL success))completion;

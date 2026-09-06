@@ -28,6 +28,10 @@
 + (void)downloadArchiveAssets:(NSArray<IMAsset *> *)assets
          presentingController:(UIViewController *)presenter
                     completion:(void (^)(void))completion;
++ (void)presentMetadataPromptForAssets:(NSArray<IMAsset *> *)assets
+                  presentingController:(UIViewController *)presenter
+                                delete:(BOOL)delete
+                            completion:(void (^)(BOOL success))completion;
 @end
 
 @implementation IMBulkTagPickerController
@@ -678,6 +682,146 @@ presentingController:(UIViewController *)presenter
 			}];
 		});
 	}];
+}
+
+#pragma mark - Custom metadata
+
++ (void)presentMetadataPickerForAssets:(NSArray<IMAsset *> *)assets
+                  presentingController:(UIViewController *)presenter
+                             completion:(void (^)(BOOL success))completion {
+	NSArray<NSString *> *assetIds = [self idsForAssets:assets];
+	if (assetIds.count == 0) {
+		[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+		                        message:_(@"Select at least one valid server asset.")
+		          presentingController:presenter];
+		if (completion) completion(NO);
+		return;
+	}
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Custom Metadata")
+	                                                                 message:[NSString stringWithFormat:_(@"Edit metadata for %ld selected item%@."),
+	                                                                                                     (long)assetIds.count,
+	                                                                                                     assetIds.count == 1 ? @"" : @"s"]
+	                                                          preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak UIViewController *weakPresenter = presenter;
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Set value")
+	                                           style:UIAlertActionStyleDefault
+	                                         handler:^(UIAlertAction *action) {
+		UIViewController *strongPresenter = weakPresenter;
+		if (!strongPresenter) { if (completion) completion(NO); return; }
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[self presentMetadataPromptForAssets:assets
+			                  presentingController:strongPresenter
+			                                delete:NO
+			                            completion:completion];
+		});
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Delete key")
+	                                           style:UIAlertActionStyleDestructive
+	                                         handler:^(UIAlertAction *action) {
+		UIViewController *strongPresenter = weakPresenter;
+		if (!strongPresenter) { if (completion) completion(NO); return; }
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[self presentMetadataPromptForAssets:assets
+			                  presentingController:strongPresenter
+			                                delete:YES
+			                            completion:completion];
+		});
+	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel")
+	                                           style:UIAlertActionStyleCancel
+	                                         handler:^(UIAlertAction *action) {
+		if (completion) completion(NO);
+	}]];
+	if (sheet.popoverPresentationController) {
+		sheet.popoverPresentationController.sourceView = presenter.view;
+		sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(presenter.view.bounds),
+	                                                            CGRectGetMaxY(presenter.view.bounds) - 1,
+	                                                            1,
+	                                                            1);
+	}
+	[presenter presentViewController:sheet animated:YES completion:nil];
+}
+
++ (void)presentMetadataPromptForAssets:(NSArray<IMAsset *> *)assets
+                  presentingController:(UIViewController *)presenter
+                                delete:(BOOL)delete
+                            completion:(void (^)(BOOL success))completion {
+	NSString *title = delete ? _(@"Delete custom metadata") : _(@"Set custom metadata");
+	NSString *message = delete ? _(@"The key will be removed from every selected asset.")
+	                           : _(@"Enter a JSON object, for example {\"text\":\"example\"}.");
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+	                                                                 message:message
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Metadata key");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+		field.clearButtonMode = UITextFieldViewModeWhileEditing;
+	}];
+	if (!delete) {
+		[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+			field.placeholder = _(@"Value (JSON object)");
+			field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+			field.autocorrectionType = UITextAutocorrectionTypeNo;
+			field.keyboardType = UIKeyboardTypeASCIICapable;
+		}];
+	}
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel")
+	                                      style:UIAlertActionStyleCancel
+	                                    handler:^(UIAlertAction *action) {
+		if (completion) completion(NO);
+	}]];
+	[alert addAction:[UIAlertAction actionWithTitle:delete ? _(@"Delete") : _(@"Save")
+	                                      style:delete ? UIAlertActionStyleDestructive : UIAlertActionStyleDefault
+	                                    handler:^(UIAlertAction *action) {
+		NSString *key = [[alert.textFields.firstObject.text ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+		if (key.length == 0 || [key rangeOfCharacterFromSet:[NSCharacterSet controlCharacterSet]].location != NSNotFound) {
+			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+			                        message:_(@"Enter a metadata key without control characters.")
+			          presentingController:presenter];
+			if (completion) completion(NO);
+			return;
+		}
+		NSArray<NSString *> *assetIds = [self idsForAssets:assets];
+		if (assetIds.count == 0) {
+			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+			                        message:_(@"Select at least one valid server asset.")
+			          presentingController:presenter];
+			if (completion) completion(NO);
+			return;
+		}
+		if (delete) {
+			NSMutableArray<NSDictionary *> *items = [NSMutableArray arrayWithCapacity:assetIds.count];
+			for (NSString *assetId in assetIds) [items addObject:@{ @"assetId": assetId, @"key": key }];
+			[IMAssetApi deleteBulkMetadataItems:items completion:^(BOOL success, NSError *error) {
+				dispatch_async(dispatch_get_main_queue(), ^{
+					if (!success) [self showErrorAlertWithTitle:_(@"Couldn't Delete Metadata") message:error.localizedDescription presentingController:presenter];
+					if (completion) completion(success);
+				});
+			}];
+			return;
+		}
+		NSString *rawValue = alert.textFields.count > 1 ? [alert.textFields[1].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : @"";
+		NSData *jsonData = [rawValue dataUsingEncoding:NSUTF8StringEncoding];
+		NSError *parseError = nil;
+		id value = jsonData.length ? [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&parseError] : nil;
+		if (![value isKindOfClass:[NSDictionary class]] || ![NSJSONSerialization isValidJSONObject:value]) {
+			[self showErrorAlertWithTitle:_(@"Couldn't Edit Metadata")
+			                        message:_(@"The value must be a valid JSON object.")
+			          presentingController:presenter];
+			if (completion) completion(NO);
+			return;
+		}
+		NSMutableArray<NSDictionary *> *items = [NSMutableArray arrayWithCapacity:assetIds.count];
+		for (NSString *assetId in assetIds) [items addObject:@{ @"assetId": assetId, @"key": key, @"value": value }];
+		[IMAssetApi upsertBulkMetadataItems:items completion:^(NSArray<NSDictionary *> *metadata, NSError *error) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				if (!metadata) [self showErrorAlertWithTitle:_(@"Couldn't Save Metadata") message:error.localizedDescription presentingController:presenter];
+				if (completion) completion(metadata != nil);
+			});
+		}];
+	}]];
+	[presenter presentViewController:alert animated:YES completion:nil];
 }
 
 @end

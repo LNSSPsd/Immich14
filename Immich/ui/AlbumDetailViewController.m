@@ -31,6 +31,7 @@
 @property (nonatomic, strong) UIBarButtonItem *deleteButton;
 @property (nonatomic, strong) UIBarButtonItem *jobButton;
 @property (nonatomic, strong) UIBarButtonItem *tagButton;
+@property (nonatomic, strong) UIBarButtonItem *metadataButton;
 @property (nonatomic) BOOL loadingAlbumMap;
 - (void)editAlbumInfoTapped;
 - (void)updateAlbumFields:(NSDictionary<NSString *, id> *)fields;
@@ -468,7 +469,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (NSArray<UIBarButtonItem *> *)makeSelectionToolbarItems {
-	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *removeImage = nil, *trashImage = nil, *jobImage = nil, *tagImage = nil;
+	UIImage *starImage = nil, *albumImage = nil, *downloadImage = nil, *removeImage = nil, *trashImage = nil, *jobImage = nil, *tagImage = nil, *metadataImage = nil;
 	if (@available(iOS 13.0, *)) {
 		starImage = [UIImage systemImageNamed:@"star"];
 		albumImage = [UIImage systemImageNamed:@"plus.rectangle.on.folder"];
@@ -477,6 +478,7 @@ static const CGFloat kCellSpacing = 2;
 		trashImage = [UIImage systemImageNamed:@"trash"];
 		jobImage = [UIImage systemImageNamed:@"gearshape"];
 		tagImage = [UIImage systemImageNamed:@"tag"];
+		metadataImage = [UIImage systemImageNamed:@"pencil"];
 	}
 	self.favoriteButton = [[UIBarButtonItem alloc] initWithImage:starImage style:UIBarButtonItemStylePlain target:self action:@selector(favoriteSelected)];
 	self.addAlbumButton = [[UIBarButtonItem alloc] initWithImage:albumImage style:UIBarButtonItemStylePlain target:self action:@selector(addSelectedToAlbum)];
@@ -486,6 +488,8 @@ static const CGFloat kCellSpacing = 2;
 	self.jobButton.accessibilityLabel = _(@"Run asset job");
 	self.tagButton = [[UIBarButtonItem alloc] initWithImage:tagImage style:UIBarButtonItemStylePlain target:self action:@selector(tagSelected)];
 	self.tagButton.accessibilityLabel = _(@"Add Tags");
+	self.metadataButton = [[UIBarButtonItem alloc] initWithImage:metadataImage style:UIBarButtonItemStylePlain target:self action:@selector(metadataSelected)];
+	self.metadataButton.accessibilityLabel = _(@"Edit custom metadata");
 	self.deleteButton = [[UIBarButtonItem alloc] initWithImage:trashImage style:UIBarButtonItemStylePlain target:self action:@selector(deleteSelected)];
 	if (@available(iOS 13.0, *)) {
 		self.removeButton.tintColor = UIColor.systemRedColor;
@@ -497,7 +501,8 @@ static const CGFloat kCellSpacing = 2;
 	UIBarButtonItem *flex4 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex5 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 	UIBarButtonItem *flex6 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.removeButton, flex4, self.jobButton, flex5, self.tagButton, flex6, self.deleteButton ];
+	UIBarButtonItem *flex7 = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+	return @[ self.favoriteButton, flex1, self.addAlbumButton, flex2, self.downloadButton, flex3, self.removeButton, flex4, self.jobButton, flex5, self.tagButton, flex6, self.metadataButton, flex7, self.deleteButton ];
 }
 
 - (BOOL)allSelectedAreFavorite {
@@ -529,6 +534,7 @@ static const CGFloat kCellSpacing = 2;
 	self.removeButton.enabled = hasSelection && self.canEditAlbum;
 	self.jobButton.enabled = hasSelection;
 	self.tagButton.enabled = hasSelection;
+	self.metadataButton.enabled = hasSelection;
 	self.deleteButton.enabled = hasSelection;
 	if (@available(iOS 13.0, *)) {
 		self.favoriteButton.image = [UIImage systemImageNamed:[self allSelectedAreFavorite] ? @"star.slash" : @"star"];
@@ -587,6 +593,18 @@ static const CGFloat kCellSpacing = 2;
 	[IMBulkAssetActions presentTagPickerForAssets:assets
 	                         presentingController:self
 	                                    completion:^(BOOL success) {
+		if (success && weakSelf.selecting) {
+			[weakSelf toggleSelecting];
+		}
+	}];
+}
+
+- (void)metadataSelected {
+	NSArray<IMAsset *> *assets = [self orderedSelectedAssets];
+	__weak typeof(self) weakSelf = self;
+	[IMBulkAssetActions presentMetadataPickerForAssets:assets
+	                              presentingController:self
+	                                         completion:^(BOOL success) {
 		if (success && weakSelf.selecting) {
 			[weakSelf toggleSelecting];
 		}
