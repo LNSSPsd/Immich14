@@ -53,9 +53,22 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 		                           withIntermediateDirectories:YES
 		                                            attributes:nil
 		                                                 error:nil];
+		[[NSNotificationCenter defaultCenter] addObserver:self
+		                                         selector:@selector(memoryWarning:)
+		                                             name:UIApplicationDidReceiveMemoryWarningNotification
+		                                           object:nil];
 		[self trimDiskCache];
 	}
 	return self;
+}
+
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)memoryWarning:(NSNotification *)notification {
+	(void)notification;
+	[self.memoryCache removeAllObjects];
 }
 
 - (void)trimDiskCache {
