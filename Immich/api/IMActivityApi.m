@@ -8,16 +8,61 @@ static NSError *IMActivityError(NSString *message) {
 	                        userInfo:@{ NSLocalizedDescriptionKey: message ?: _(@"The server returned an invalid activity response.") }];
 }
 
+static NSError *IMActivityValidationError(NSString *message) {
+	return [NSError errorWithDomain:IMApiErrorDomain
+	                            code:1
+	                        userInfo:@{ NSLocalizedDescriptionKey: message ?: _(@"The activity request is invalid.") }];
+}
+
+static BOOL IMActivityUUIDv4(NSString *value) {
+	if (![value isKindOfClass:[NSString class]] || value.length != 36) {
+		return NO;
+	}
+	NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:value];
+	if (!uuid) {
+		return NO;
+	}
+	NSString *canonical = uuid.UUIDString.lowercaseString;
+	return canonical.length == 36 && [canonical characterAtIndex:14] == '4' &&
+	       ([canonical characterAtIndex:19] == '8' || [canonical characterAtIndex:19] == '9' ||
+	        [canonical characterAtIndex:19] == 'a' || [canonical characterAtIndex:19] == 'b');
+}
+
+static BOOL IMActivityOptionalUUIDv4(id value) {
+	if (value == nil) {
+		return YES;
+	}
+	return [value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0 && IMActivityUUIDv4(value);
+}
+
 @implementation IMActivityApi
 
 + (nullable NSURLSessionTask *)activitiesForAlbumId:(NSString *)albumId
                                              assetId:(NSString *)assetId
                                                 type:(NSString *)type
                                                level:(NSString *)level
-                                              userId:(NSString *)userId
+	                                         userId:(NSString *)userId
                                           completion:(void (^)(NSArray<IMActivity *> *_Nullable, NSError *_Nullable))completion {
-	if (albumId.length == 0) {
-		completion(nil, IMActivityError(_(@"An album is required to load activity.")));
+	if (!IMActivityUUIDv4(albumId)) {
+		completion(nil, IMActivityValidationError(_(@"A valid album ID is required to load activity.")));
+		return nil;
+	}
+	if (assetId && !IMActivityOptionalUUIDv4(assetId)) {
+		completion(nil, IMActivityValidationError(_(@"A valid asset ID is required to filter activity.")));
+		return nil;
+	}
+	if (type && (![type isKindOfClass:[NSString class]] ||
+	             (type.length && !([type isEqualToString:@"like"] || [type isEqualToString:@"comment"])))) {
+		completion(nil, IMActivityValidationError(_(@"Choose a valid activity type.")));
+		return nil;
+	}
+	if (level && (![level isKindOfClass:[NSString class]] ||
+	              (level.length && !([level isEqualToString:@"album"] || [level isEqualToString:@"asset"])))) {
+		completion(nil, IMActivityValidationError(_(@"Choose a valid activity level.")));
+		return nil;
+	}
+	if (userId && !IMActivityOptionalUUIDv4(userId)) {
+		completion(nil, IMActivityValidationError(_(@"A valid user ID is required to filter activity.")));
 		return nil;
 	}
 	NSMutableDictionary<NSString *, NSString *> *query = [@{ @"albumId": albumId } mutableCopy];
@@ -48,8 +93,12 @@ static NSError *IMActivityError(NSString *message) {
 + (nullable NSURLSessionTask *)statisticsForAlbumId:(NSString *)albumId
                                              assetId:(NSString *)assetId
                                           completion:(void (^)(NSInteger, NSInteger, NSError *_Nullable))completion {
-	if (albumId.length == 0) {
-		completion(0, 0, IMActivityError(_(@"An album is required to load activity.")));
+	if (!IMActivityUUIDv4(albumId)) {
+		completion(0, 0, IMActivityValidationError(_(@"A valid album ID is required to load activity.")));
+		return nil;
+	}
+	if (assetId && !IMActivityOptionalUUIDv4(assetId)) {
+		completion(0, 0, IMActivityValidationError(_(@"A valid asset ID is required to load activity.")));
 		return nil;
 	}
 	NSMutableDictionary<NSString *, NSString *> *query = [@{ @"albumId": albumId } mutableCopy];
@@ -73,11 +122,20 @@ static NSError *IMActivityError(NSString *message) {
 
 + (nullable NSURLSessionTask *)createForAlbumId:(NSString *)albumId
                                          assetId:(NSString *)assetId
-                                            type:(NSString *)type
+                                         type:(NSString *)type
                                          comment:(NSString *)comment
                                       completion:(void (^)(IMActivity *_Nullable, NSError *_Nullable))completion {
-	if (albumId.length == 0 || !([type isEqualToString:@"like"] || [type isEqualToString:@"comment"])) {
-		completion(nil, IMActivityError(_(@"Choose a valid activity type and album.")));
+	if (!IMActivityUUIDv4(albumId) || ![type isKindOfClass:[NSString class]] ||
+	    !([type isEqualToString:@"like"] || [type isEqualToString:@"comment"])) {
+		completion(nil, IMActivityValidationError(_(@"Choose a valid activity type and album.")));
+		return nil;
+	}
+	if (assetId && !IMActivityOptionalUUIDv4(assetId)) {
+		completion(nil, IMActivityValidationError(_(@"A valid asset ID is required.")));
+		return nil;
+	}
+	if (comment && ![comment isKindOfClass:[NSString class]]) {
+		completion(nil, IMActivityValidationError(_(@"The comment must be text.")));
 		return nil;
 	}
 	if ([type isEqualToString:@"comment"] && comment.length == 0) {
@@ -101,8 +159,8 @@ static NSError *IMActivityError(NSString *message) {
 
 + (nullable NSURLSessionTask *)deleteActivityId:(NSString *)activityId
                                       completion:(void (^)(BOOL, NSError *_Nullable))completion {
-	if (activityId.length == 0) {
-		completion(NO, IMActivityError(_(@"Invalid activity identifier.")));
+	if (!IMActivityUUIDv4(activityId)) {
+		completion(NO, IMActivityValidationError(_(@"Invalid activity identifier.")));
 		return nil;
 	}
 	NSString *path = [NSString stringWithFormat:@"/activities/%@", activityId];
