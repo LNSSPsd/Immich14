@@ -33,6 +33,8 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 @property (nonatomic) BOOL loading;
 @property (nonatomic) BOOL mutating;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic) BOOL serverPingLoaded;
+@property (nonatomic) BOOL serverOnline;
 @end
 
 @implementation AdminServerViewController
@@ -96,6 +98,8 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 	__block IMServerMediaTypes *mediaTypes = nil;
 	__block IMUserLicense *license = nil;
 	__block BOOL licenseLoaded = NO;
+	__block BOOL pingCompleted = NO;
+	__block BOOL serverOnline = NO;
 	__block NSDictionary *status = nil;
 	__block NSError *firstError = nil;
 	dispatch_group_enter(group);
@@ -153,6 +157,12 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		}
 		dispatch_group_leave(group);
 	}];
+	dispatch_group_enter(group);
+	[IMServerApi pingWithCompletion:^(BOOL success, NSError *error) {
+		pingCompleted = YES;
+		serverOnline = !error && success;
+		dispatch_group_leave(group);
+	}];
 	dispatch_group_notify(group, dispatch_get_main_queue(), ^{
 		AdminServerViewController *self = weakSelf;
 		if (!self) return;
@@ -170,9 +180,13 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 			self.licenseLoaded = YES;
 			self.license = license;
 		}
+		if (pingCompleted) {
+			self.serverPingLoaded = YES;
+			self.serverOnline = serverOnline;
+		}
 		if (status) self.maintenanceStatus = status;
 		[self.tableView reloadData];
-		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck || self.versionHistory || self.mediaTypes) ? nil : _(@"Couldn't load server information. Tap to retry.");
+		self.statusLabel.text = (self.stats || self.about || self.features || self.config || self.versionCheck || self.versionHistory || self.mediaTypes || self.serverPingLoaded) ? nil : _(@"Couldn't load server information. Tap to retry.");
 		if (!self.stats && !self.about && firstError) [self showError:firstError];
 	});
 }
@@ -339,13 +353,13 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return (self.stats || self.about || self.features || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes || self.maintenanceStatus || self.licenseLoaded) ? IMAdminServerSectionCount : 0;
+	return (self.stats || self.about || self.features || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes || self.maintenanceStatus || self.licenseLoaded || self.serverPingLoaded) ? IMAdminServerSectionCount : 0;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == IMAdminServerSectionTotals) return 3;
 	if (section == IMAdminServerSectionUsers) return self.stats.usageByUser.count;
-	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes ? 8 : 0;
+	if (section == IMAdminServerSectionInfo) return self.about || self.config || self.storage || self.versionCheck || self.versionHistory || self.mediaTypes || self.serverPingLoaded ? 9 : 0;
 	if (section == IMAdminServerSectionFeatures) return self.features ? 16 : 0;
 	if (section == IMAdminServerSectionLicense) return 1;
 	if (section == IMAdminServerSectionMaintenance) return 1;
@@ -385,7 +399,7 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		return cell;
 	}
 	if (indexPath.section == IMAdminServerSectionInfo) {
-		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release"), _(@"Supported media"), _(@"Version history")];
+		NSArray *titles = @[_(@"Server version"), _(@"Build"), _(@"License"), _(@"External domain"), _(@"Trash retention"), _(@"Latest release"), _(@"Supported media"), _(@"Version history"), _(@"Server availability")];
 		NSString *build = self.about.build.length ? self.about.build : (self.about.sourceRef.length ? self.about.sourceRef : _(@"Unknown"));
 		NSString *license = self.about ? (self.about.licensed ? _(@"Licensed") : _(@"Community")) : _(@"Unavailable");
 		NSString *domain = self.config.externalDomain.length ? self.config.externalDomain : _(@"Not configured");
@@ -406,9 +420,10 @@ typedef NS_ENUM(NSInteger, IMAdminServerSection) {
 		NSString *historySummary = self.versionHistory ? [NSString stringWithFormat:_(@"%lu recorded %@"),
 		                                                   (unsigned long)self.versionHistory.count,
 		                                                   self.versionHistory.count == 1 ? _(@"version") : _(@"versions")] : _(@"Unavailable");
+		NSString *availabilitySummary = self.serverPingLoaded && self.serverOnline ? _(@"Online") : _(@"Unavailable");
 		NSArray *values = @[
 			self.about.version.length ? self.about.version : _(@"Unavailable"), build, license, domain, trash,
-			versionCheckSummary, mediaSummary, historySummary
+			versionCheckSummary, mediaSummary, historySummary, availabilitySummary
 		];
 		cell.textLabel.text = titles[indexPath.row];
 		cell.detailTextLabel.text = values[indexPath.row];
