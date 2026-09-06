@@ -446,6 +446,13 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 	return @(number);
 }
 
+static BOOL IMWorkflowSchemaIsScalar(NSDictionary *schema) {
+	if (![schema isKindOfClass:[NSDictionary class]]) return NO;
+	if (IMWorkflowSchemaBoolean(schema[@"array"]) && [schema[@"array"] boolValue]) return NO;
+	NSString *type = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : @"object";
+	return [@[ @"string", @"number", @"integer", @"boolean" ] containsObject:type];
+}
+
 - (NSMutableArray<NSMutableDictionary *> *_Nullable)rawStepDictionariesWithError:(NSString *_Nullable __autoreleasing *)message {
 	NSString *text = [self.stepsView.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
 	if (text.length == 0) text = @"[]";
@@ -531,7 +538,7 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 	NSMutableDictionary<NSString *, IMPluginMethod *> *methodsByKey = [NSMutableDictionary dictionaryWithCapacity:methods.count];
 	for (IMPluginMethod *method in methods) if (method.key.length > 0) methodsByKey[method.key] = method;
 	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Configure plugin step")
-	                                                                  message:_(@"Choose a step. Scalar schema fields can be edited here; nested and array values remain available in raw JSON.")
+	                                                                  message:_(@"Choose a step. Scalar fields and top-level nested or array JSON values can be edited here; raw JSON remains available for advanced edits.")
 	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
 	__weak typeof(self) weakSelf = self;
 	for (NSUInteger index = 0; index < steps.count; index++) {
@@ -561,19 +568,16 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 	NSDictionary *properties = [schema[@"properties"] isKindOfClass:[NSDictionary class]] ? schema[@"properties"] : nil;
 	NSString *schemaType = [schema[@"type"] isKindOfClass:[NSString class]] ? schema[@"type"] : @"object";
 	if (![schemaType isEqualToString:@"object"] || properties.count == 0) {
-		[self showValidation:_(@"This plugin has no editable top-level scalar fields. Use the raw JSON editor for its configuration.")];
+		[self showValidation:_(@"This plugin has no editable top-level fields. Use the raw JSON editor for its configuration.")];
 		return;
 	}
 	NSMutableArray<NSString *> *keys = [NSMutableArray array];
 	for (NSString *key in properties) {
-		NSDictionary *fieldSchema = [properties[key] isKindOfClass:[NSDictionary class]] ? properties[key] : nil;
-		NSString *type = [fieldSchema[@"type"] isKindOfClass:[NSString class]] ? fieldSchema[@"type"] : @"";
-		BOOL array = IMWorkflowSchemaBoolean(fieldSchema[@"array"]) && [fieldSchema[@"array"] boolValue];
-		if (!array && ([@[ @"string", @"number", @"integer", @"boolean" ] containsObject:type])) [keys addObject:key];
+		if ([properties[key] isKindOfClass:[NSDictionary class]]) [keys addObject:key];
 	}
 	[keys sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
 	if (!keys.count) {
-		[self showValidation:_(@"This plugin's fields are nested or arrays. Use the raw JSON editor for its configuration.")];
+		[self showValidation:_(@"This plugin has no editable fields. Use the raw JSON editor for its configuration.")];
 		return;
 	}
 	NSString *rawError = nil;
@@ -586,25 +590,31 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 	    ? [steps[stepIndex][@"config"] mutableCopy]
 	    : [NSMutableDictionary dictionary];
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:method.title.length ? method.title : method.key
-	                                                                 message:_(@"Enter scalar values. Required fields and schema limits are checked before the workflow is saved.")
+	                                                                 message:_(@"Enter scalar values, or valid JSON for nested and array fields. Required fields and schema limits are checked before the workflow is saved.")
 	                                                          preferredStyle:UIAlertControllerStyleAlert];
 	for (NSString *key in keys) {
 		NSDictionary *fieldSchema = properties[key];
-		NSString *type = fieldSchema[@"type"];
+		NSString *type = [fieldSchema[@"type"] isKindOfClass:[NSString class]] ? fieldSchema[@"type"] : @"object";
+		BOOL scalar = IMWorkflowSchemaIsScalar(fieldSchema);
 		id current = config[key];
 		NSString *initial = @"";
-		if ([type isEqualToString:@"boolean"] && IMWorkflowSchemaBoolean(current)) initial = [current boolValue] ? @"true" : @"false";
-		else if ([current isKindOfClass:[NSString class]]) initial = current;
-		else if ([current isKindOfClass:[NSNumber class]]) initial = [current stringValue];
+		if (scalar) {
+			if ([type isEqualToString:@"boolean"] && IMWorkflowSchemaBoolean(current)) initial = [current boolValue] ? @"true" : @"false";
+			else if ([current isKindOfClass:[NSString class]]) initial = current;
+			else if ([current isKindOfClass:[NSNumber class]]) initial = [current stringValue];
+		} else if ([current isKindOfClass:[NSArray class]] || [current isKindOfClass:[NSDictionary class]]) {
+			NSData *currentData = [NSJSONSerialization dataWithJSONObject:current options:0 error:nil];
+			if (currentData) initial = [[NSString alloc] initWithData:currentData encoding:NSUTF8StringEncoding] ?: @"";
+		}
 		[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-			field.placeholder = key;
+			field.placeholder = scalar ? key : [NSString stringWithFormat:_(@"%@ (%@ JSON)"), key, IMWorkflowSchemaFieldDescription(fieldSchema)];
 			field.text = initial;
 			field.clearButtonMode = UITextFieldViewModeWhileEditing;
 			field.autocapitalizationType = UITextAutocapitalizationTypeNone;
 			field.autocorrectionType = UITextAutocorrectionTypeNo;
-			field.accessibilityLabel = key;
+			field.accessibilityLabel = scalar ? key : [NSString stringWithFormat:_(@"%@, %@ JSON"), key, IMWorkflowSchemaFieldDescription(fieldSchema)];
 			id enumeration = fieldSchema[@"enum"];
-			if ([enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0) {
+			if (scalar && [enumeration isKindOfClass:[NSArray class]] && [enumeration count] > 0) {
 				NSMutableArray<NSString *> *choices = [NSMutableArray array];
 				for (id choice in enumeration) if ([choice isKindOfClass:[NSString class]]) [choices addObject:choice];
 				if (choices.count == [enumeration count]) field.placeholder = [NSString stringWithFormat:_(@"%@ (%@)"), key, [choices componentsJoinedByString:@", "]];
@@ -621,7 +631,8 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 		for (NSUInteger index = 0; index < keys.count; index++) {
 			NSString *key = keys[index];
 			NSDictionary *fieldSchema = properties[key];
-			NSString *type = fieldSchema[@"type"];
+			NSString *type = [fieldSchema[@"type"] isKindOfClass:[NSString class]] ? fieldSchema[@"type"] : @"object";
+			BOOL scalar = IMWorkflowSchemaIsScalar(fieldSchema);
 			NSString *text = [alert.textFields[index].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
 			BOOL isRequired = [required containsObject:key];
 			if (text.length == 0) {
@@ -632,7 +643,16 @@ static NSNumber *IMWorkflowSchemaNumberFromText(NSString *text, BOOL integer) {
 				[updatedConfig removeObjectForKey:key];
 				continue;
 			}
-			if ([type isEqualToString:@"string"]) {
+			if (!scalar) {
+				NSData *jsonData = [text dataUsingEncoding:NSUTF8StringEncoding];
+				NSError *jsonError = nil;
+				id parsed = jsonData ? [NSJSONSerialization JSONObjectWithData:jsonData options:NSJSONReadingMutableContainers error:&jsonError] : nil;
+				if (!parsed || [parsed isKindOfClass:[NSNull class]]) {
+					[strongSelf showValidation:[NSString stringWithFormat:_(@"%@ must contain valid JSON%@."), key, jsonError.localizedDescription.length ? [NSString stringWithFormat:_(@" (%@)"), jsonError.localizedDescription] : @""]];
+					return;
+				}
+				updatedConfig[key] = parsed;
+			} else if ([type isEqualToString:@"string"]) {
 				updatedConfig[key] = text;
 			} else if ([type isEqualToString:@"number"] || [type isEqualToString:@"integer"]) {
 				NSNumber *number = IMWorkflowSchemaNumberFromText(text, [type isEqualToString:@"integer"]);
