@@ -3,6 +3,7 @@
 #import "IMApiClient.h"
 #import "IMAsset.h"
 #import "common.h"
+#import <math.h>
 
 static const NSInteger kGuestColumns = 3;
 static const CGFloat kGuestSpacing = 2.0;
@@ -15,6 +16,7 @@ static const CGFloat kGuestSpacing = 2.0;
 - (void)configureWithAsset:(IMAsset *)asset
                  publicURL:(NSURL *)publicURL
                  imageCache:(NSCache<NSString *, UIImage *> *)imageCache;
+- (void)setAccessibilityForAsset:(nullable IMAsset *)asset;
 @end
 
 @interface IMGuestPreviewViewController : UIViewController
@@ -42,6 +44,18 @@ static const CGFloat kGuestSpacing = 2.0;
 
 @implementation IMGuestAssetCell
 
+static NSString *IMGuestAssetAccessibilityDate(NSDate *date, NSString *fallback) {
+	if (!date) return fallback ?: @"";
+	static NSDateFormatter *formatter;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterShortStyle;
+	});
+	return [formatter stringFromDate:date] ?: fallback ?: @"";
+}
+
 - (instancetype)initWithFrame:(CGRect)frame {
 	self = [super initWithFrame:frame];
 	if (self) {
@@ -63,8 +77,33 @@ static const CGFloat kGuestSpacing = 2.0;
 			[self.spinner.centerXAnchor constraintEqualToAnchor:self.contentView.centerXAnchor],
 			[self.spinner.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
 		]];
+		self.isAccessibilityElement = NO;
 	}
 	return self;
+}
+
+- (void)setAccessibilityForAsset:(IMAsset *)asset {
+	self.isAccessibilityElement = asset != nil;
+	if (!asset) {
+		self.accessibilityLabel = nil;
+		self.accessibilityValue = nil;
+		self.accessibilityHint = nil;
+		self.accessibilityTraits = UIAccessibilityTraitNone;
+		return;
+	}
+	NSString *kind = asset.isImage ? _(@"Photo") : _(@"Video");
+	NSString *date = IMGuestAssetAccessibilityDate(IMDateFromServerTimestamp(asset.fileCreatedAt), asset.fileCreatedAt);
+	self.accessibilityLabel = date.length ? [NSString stringWithFormat:_(@"%@, %@"), kind, date] : kind;
+	NSMutableArray<NSString *> *details = [NSMutableArray array];
+	if (!asset.isImage && asset.durationMs > 0) {
+		NSInteger totalSeconds = asset.durationMs / 1000;
+		[details addObject:[NSString stringWithFormat:_(@"Duration %ld minutes %ld seconds"),
+			                                                   (long)(totalSeconds / 60),
+			                                                   (long)(totalSeconds % 60)]];
+	}
+	self.accessibilityValue = [details componentsJoinedByString:@", "];
+	self.accessibilityHint = _(@"Double-tap to open this shared item.");
+	self.accessibilityTraits = UIAccessibilityTraitImage | UIAccessibilityTraitButton;
 }
 
 - (void)prepareForReuse {
@@ -74,6 +113,7 @@ static const CGFloat kGuestSpacing = 2.0;
 	self.generation += 1;
 	self.imageView.image = nil;
 	[self.spinner stopAnimating];
+	[self setAccessibilityForAsset:nil];
 }
 
 - (void)configureWithAsset:(IMAsset *)asset
@@ -83,6 +123,7 @@ static const CGFloat kGuestSpacing = 2.0;
 	self.task = nil;
 	NSUInteger generation = ++self.generation;
 	self.imageView.image = [imageCache objectForKey:asset.assetId];
+	[self setAccessibilityForAsset:asset];
 	if (self.imageView.image) {
 		[self.spinner stopAnimating];
 		return;

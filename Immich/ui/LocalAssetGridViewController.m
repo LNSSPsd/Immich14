@@ -1,6 +1,7 @@
 #import "LocalAssetGridViewController.h"
 #import "common.h"
 #import <Photos/Photos.h>
+#import <math.h>
 
 static NSString *const kCellId = @"LocalAssetCell";
 
@@ -8,9 +9,22 @@ static NSString *const kCellId = @"LocalAssetCell";
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic) PHImageRequestID requestId;
 - (void)configureWithAsset:(nullable PHAsset *)asset;
+- (void)setAccessibilityForAsset:(nullable PHAsset *)asset;
 @end
 
 @implementation IMLocalAssetCell
+
+static NSString *IMLocalAssetAccessibilityDate(NSDate *date) {
+	if (!date) return nil;
+	static NSDateFormatter *formatter;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterShortStyle;
+	});
+	return [formatter stringFromDate:date];
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
 	self = [super initWithFrame:frame];
@@ -32,8 +46,34 @@ static NSString *const kCellId = @"LocalAssetCell";
 			[self.imageView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
 		]];
 		self.requestId = PHInvalidImageRequestID;
+		self.isAccessibilityElement = NO;
 	}
 	return self;
+}
+
+- (void)setAccessibilityForAsset:(PHAsset *)asset {
+	self.isAccessibilityElement = asset != nil;
+	if (!asset) {
+		self.accessibilityLabel = nil;
+		self.accessibilityValue = nil;
+		self.accessibilityHint = nil;
+		self.accessibilityTraits = UIAccessibilityTraitNone;
+		return;
+	}
+	NSString *kind = asset.mediaType == PHAssetMediaTypeVideo ? _(@"Video") : _(@"Photo");
+	NSString *date = IMLocalAssetAccessibilityDate(asset.creationDate);
+	self.accessibilityLabel = date.length ? [NSString stringWithFormat:_(@"%@, %@"), kind, date] : kind;
+	NSMutableArray<NSString *> *details = [NSMutableArray array];
+	if (asset.mediaType == PHAssetMediaTypeVideo && asset.duration > 0) {
+		NSInteger totalSeconds = (NSInteger)llround(asset.duration);
+		[details addObject:[NSString stringWithFormat:_(@"Duration %ld minutes %ld seconds"),
+			                                                   (long)(totalSeconds / 60),
+			                                                   (long)(totalSeconds % 60)]];
+	}
+	if (asset.favorite) [details addObject:_(@"Favorite")];
+	self.accessibilityValue = [details componentsJoinedByString:@", "];
+	self.accessibilityHint = _(@"This item is waiting to upload.");
+	self.accessibilityTraits = UIAccessibilityTraitImage;
 }
 
 - (void)configureWithAsset:(nullable PHAsset *)asset {
@@ -42,6 +82,7 @@ static NSString *const kCellId = @"LocalAssetCell";
 		self.requestId = PHInvalidImageRequestID;
 	}
 	self.imageView.image = nil;
+	[self setAccessibilityForAsset:asset];
 	if (!asset) {
 		return;
 	}
@@ -71,6 +112,7 @@ static NSString *const kCellId = @"LocalAssetCell";
 		self.requestId = PHInvalidImageRequestID;
 	}
 	self.imageView.image = nil;
+	[self setAccessibilityForAsset:nil];
 }
 
 @end

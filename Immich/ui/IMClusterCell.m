@@ -14,6 +14,7 @@ static NSString *const kSkeletonAnimationKey = @"clusterSkeletonPulse";
 @property (nonatomic, strong) UILabel *countLabel;
 @property (nonatomic, strong, nullable) IMThumbCacheTask *thumbTask;
 @property (nonatomic) PHImageRequestID localRequestId;
+- (void)updateAccessibility;
 @end
 
 @implementation IMClusterCell
@@ -110,11 +111,20 @@ static NSString *const kSkeletonAnimationKey = @"clusterSkeletonPulse";
 	[self.coverView.layer removeAnimationForKey:kSkeletonAnimationKey];
 }
 
+- (void)updateAccessibility {
+	self.isAccessibilityElement = self.titleLabel.text.length > 0;
+	self.accessibilityLabel = self.titleLabel.text.length > 0 ? self.titleLabel.text : nil;
+	self.accessibilityValue = self.countLabel.text.length > 0 ? self.countLabel.text : nil;
+	self.accessibilityHint = self.isAccessibilityElement ? _(@"Double-tap to browse this month.") : nil;
+	self.accessibilityTraits = self.isAccessibilityElement ? UIAccessibilityTraitButton : UIAccessibilityTraitNone;
+}
+
 - (void)configureWithTitle:(NSString *)title count:(NSInteger)count coverAssetId:(nullable NSString *)assetId {
 	[self cancelPendingRequests];
 	self.coverView.image = nil;
 	self.titleLabel.text = title;
 	self.countLabel.text = [NSString stringWithFormat:_(@"%ld items"), (long)count];
+	[self updateAccessibility];
 
 	if (!assetId) {
 		[self startSkeletonPulse];
@@ -135,6 +145,7 @@ static NSString *const kSkeletonAnimationKey = @"clusterSkeletonPulse";
 	self.coverView.image = nil;
 	self.titleLabel.text = title;
 	self.countLabel.text = [NSString stringWithFormat:_(@"%ld items"), (long)count];
+	[self updateAccessibility];
 
 	if (!asset) {
 		[self startSkeletonPulse];
@@ -165,6 +176,9 @@ static NSString *const kSkeletonAnimationKey = @"clusterSkeletonPulse";
 	[self cancelPendingRequests];
 	[self stopSkeletonPulse];
 	self.coverView.image = nil;
+	self.titleLabel.text = nil;
+	self.countLabel.text = nil;
+	[self updateAccessibility];
 }
 
 @end
