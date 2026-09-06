@@ -1578,7 +1578,8 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
-	BOOL available = [self currentAssetAllowsMutations] && asset.isImage && asset.livePhotoVideoId.length == 0;
+	BOOL available = [self currentAssetAllowsMutations] && asset.isImage && asset.livePhotoVideoId.length == 0 &&
+	                 ![asset.projectionType isEqualToString:@"EQUIRECTANGULAR"];
 	self.editButton.hidden = !available;
 	self.editButton.enabled = available;
 }
@@ -1588,7 +1589,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		return;
 	}
 	IMAsset *asset = self.assets[self.currentIndex];
-	if (!asset.isImage || asset.livePhotoVideoId.length > 0) {
+	if (!asset.isImage || asset.livePhotoVideoId.length > 0 || [asset.projectionType isEqualToString:@"EQUIRECTANGULAR"]) {
 		return;
 	}
 	AssetEditViewController *editor = [[AssetEditViewController alloc] initWithAsset:asset];

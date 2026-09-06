@@ -202,7 +202,7 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	}
 	NSArray<NSString *> *columnKeys = @[
 		@"fileCreatedAt", @"ownerId", @"isFavorite", @"isImage", @"duration", @"ratio",
-		@"city", @"country", @"livePhotoVideoId", @"stack"
+		@"city", @"country", @"projectionType", @"livePhotoVideoId", @"stack"
 	];
 	for (NSString *key in columnKeys) {
 		id column = json[key];
@@ -226,6 +226,7 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	NSArray *ratio = json[@"ratio"];
 	NSArray *city = json[@"city"];
 	NSArray *country = json[@"country"];
+	NSArray *projectionType = json[@"projectionType"];
 	NSArray *livePhotoVideoId = json[@"livePhotoVideoId"];
 	NSArray *stack = json[@"stack"];
 	for (NSUInteger index = 0; index < ids.count; index++) {
@@ -265,6 +266,10 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 		}
 		id countryValue = index < country.count ? country[index] : nil;
 		if (!IMAssetNullOrString(countryValue)) {
+			return NO;
+		}
+		id projectionValue = index < projectionType.count ? projectionType[index] : nil;
+		if (!IMAssetNullOrString(projectionValue)) {
 			return NO;
 		}
 		id liveValue = index < livePhotoVideoId.count ? livePhotoVideoId[index] : nil;

@@ -24,6 +24,7 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 @property (nonatomic) double ratio;
 @property (nonatomic, copy) NSString *city;
 @property (nonatomic, copy) NSString *country;
+@property (nonatomic, copy, nullable) NSString *projectionType;
 @property (nonatomic, copy) NSString *livePhotoVideoId;
 @property (nonatomic, copy) NSString *stackId;
 @property (nonatomic) NSInteger stackAssetCount;
@@ -47,6 +48,7 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 	NSArray *ratio = IMArrayOrEmpty(json[@"ratio"]);
 	NSArray *city = IMArrayOrEmpty(json[@"city"]);
 	NSArray *country = IMArrayOrEmpty(json[@"country"]);
+	NSArray *projectionType = IMArrayOrEmpty(json[@"projectionType"]);
 	NSArray *livePhotoVideoId = IMArrayOrEmpty(json[@"livePhotoVideoId"]);
 	id stackValue = json[@"stack"];
 	NSArray *stack = IMArrayOrEmpty(stackValue);
@@ -76,6 +78,8 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 		asset.city = [cityValue isKindOfClass:[NSString class]] ? cityValue : nil;
 		id countryValue = IMValueOrNil(IMArrayValue(country, i));
 		asset.country = [countryValue isKindOfClass:[NSString class]] ? countryValue : nil;
+		id projectionValue = IMValueOrNil(IMArrayValue(projectionType, i));
+		asset.projectionType = [projectionValue isKindOfClass:[NSString class]] ? projectionValue : nil;
 		id liveValue = IMValueOrNil(IMArrayValue(livePhotoVideoId, i));
 		asset.livePhotoVideoId = [liveValue isKindOfClass:[NSString class]] ? liveValue : nil;
 		id rowStackValue = IMValueOrNil(IMArrayValue(stack, i));
@@ -126,6 +130,11 @@ static id IMArrayValue(NSArray *array, NSUInteger index) {
 	id widthValue = IMValueOrNil(dict[@"width"]);
 	id heightValue = IMValueOrNil(dict[@"height"]);
 	NSDictionary *exif = IMValueOrNil(dict[@"exifInfo"]);
+	id projectionValue = IMValueOrNil(dict[@"projectionType"]);
+	if (![projectionValue isKindOfClass:[NSString class]] && [exif isKindOfClass:[NSDictionary class]]) {
+		projectionValue = IMValueOrNil(exif[@"projectionType"]);
+	}
+	asset.projectionType = [projectionValue isKindOfClass:[NSString class]] ? projectionValue : nil;
 	if (![widthValue isKindOfClass:[NSNumber class]] && [exif isKindOfClass:[NSDictionary class]]) {
 		widthValue = IMValueOrNil(exif[@"exifImageWidth"]);
 		heightValue = IMValueOrNil(exif[@"exifImageHeight"]);

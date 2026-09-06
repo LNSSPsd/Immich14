@@ -322,7 +322,8 @@ static UIImage *IMEditorApplyEdits(UIImage *source, NSArray<IMAssetEdit *> *edit
 		[self.spinner.centerYAnchor constraintEqualToAnchor:self.canvasView.centerYAnchor],
 	]];
 
-	if (!self.asset.isImage || self.asset.livePhotoVideoId.length > 0) {
+	if (!self.asset.isImage || self.asset.livePhotoVideoId.length > 0 ||
+	    [self.asset.projectionType isEqualToString:@"EQUIRECTANGULAR"]) {
 		[self showError:_(@"Only regular still photos can be edited.")];
 		return;
 	}
