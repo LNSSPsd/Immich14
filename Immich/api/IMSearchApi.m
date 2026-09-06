@@ -465,6 +465,12 @@ static const NSInteger kIMPeoplePageSize = 1000;
 	return [self postSearch:@"/search/metadata" body:@{ @"city": city ?: @"" } page:page completion:completion];
 }
 
++ (nullable NSURLSessionTask *)metadataSearchWithMake:(NSString *)make
+                                                  page:(NSInteger)page
+                                            completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error))completion {
+	return [self postSearch:@"/search/metadata" body:@{ @"make": make ?: @"" } page:page completion:completion];
+}
+
 + (nullable NSURLSessionTask *)metadataSearchWithTagId:(NSString *)tagId
                                             completion:(void (^)(NSArray<IMAsset *> *_Nullable assets, NSError *_Nullable error))completion {
 	return [self postSearch:@"/search/metadata" body:@{ @"tagIds": @[ tagId ?: @"" ] } completion:completion];

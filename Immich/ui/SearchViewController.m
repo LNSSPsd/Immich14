@@ -327,6 +327,11 @@ static const CGFloat kScopeBarHeight = 44;
 	                                        handler:^(UIAlertAction *action) {
 		[weakSelf loadCitySuggestions];
 	}]];
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Camera makes")
+	                                          style:UIAlertActionStyleDefault
+	                                        handler:^(UIAlertAction *action) {
+		[weakSelf loadCameraMakeSuggestions];
+	}]];
 	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
 	if (sheet.popoverPresentationController) {
 		sheet.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItem;
@@ -497,6 +502,66 @@ static const CGFloat kScopeBarHeight = 44;
 		}
 		[strongSelf presentViewController:sheet animated:YES completion:nil];
 	}];
+}
+
+- (void)loadCameraMakeSuggestions {
+	[self.discoveryTask cancel];
+	NSInteger generation = ++self.discoveryGeneration;
+	[self.activityIndicator startAnimating];
+	NSString *query = self.lastQuery.lowercaseString;
+	__weak typeof(self) weakSelf = self;
+	self.discoveryTask = [IMSearchApi searchSuggestionsForType:IMSearchSuggestionTypeCameraMake
+	                                                    country:nil
+	                                                       state:nil
+	                                                       make:nil
+	                                                      model:nil
+	                                                  lensModel:nil
+	                                                includeNull:NO
+	                                                 completion:^(NSArray<NSString *> *_Nullable suggestions, NSError *_Nullable error) {
+		SearchViewController *strongSelf = weakSelf;
+		if (!strongSelf || generation != strongSelf.discoveryGeneration) return;
+		strongSelf.discoveryTask = nil;
+		[strongSelf.activityIndicator stopAnimating];
+		if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) return;
+		if (error || !suggestions) {
+			[strongSelf showDiscoveryError:error title:_(@"Camera makes")];
+			return;
+		}
+		NSMutableArray<NSString *> *filtered = [NSMutableArray arrayWithCapacity:MIN((NSUInteger)30, suggestions.count)];
+		for (NSString *suggestion in suggestions) {
+			if (query.length > 0 && [suggestion.lowercaseString rangeOfString:query].location == NSNotFound) continue;
+			[filtered addObject:suggestion];
+			if (filtered.count == 30) break;
+		}
+		if (filtered.count == 0) {
+			[strongSelf showDiscoveryError:[NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:@{ NSLocalizedDescriptionKey: _(@"No camera makes found.") }]
+			                         title:_(@"Camera makes")];
+			return;
+		}
+		if (!strongSelf.viewIfLoaded.window) return;
+		UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Choose a camera make") message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+		for (NSString *suggestion in filtered) {
+			[sheet addAction:[UIAlertAction actionWithTitle:suggestion style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+				[strongSelf loadCameraMakeAssets:suggestion];
+			}]];
+		}
+		[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+		if (sheet.popoverPresentationController) sheet.popoverPresentationController.barButtonItem = strongSelf.navigationItem.rightBarButtonItem;
+		[strongSelf presentViewController:sheet animated:YES completion:nil];
+	}];
+}
+
+- (void)loadCameraMakeAssets:(NSString *)make {
+	[self.browseTask cancel];
+	self.browseTask = nil;
+	__weak typeof(self) weakSelf = self;
+	self.browseRetryAction = ^{ [weakSelf loadCameraMakeAssets:make]; };
+	[self startBrowseTask:[IMSearchApi metadataSearchWithMake:make
+	                                                           page:1
+	                                                     completion:[self browseCompletionWithTitle:make
+	                                                                                     pageLoader:^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
+		return [IMSearchApi metadataSearchWithMake:make page:page completion:pageCompletion];
+	}]]];
 }
 
 #pragma mark - UISearchResultsUpdating
