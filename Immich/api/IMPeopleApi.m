@@ -29,6 +29,17 @@ static NSArray<NSString *> *_Nullable IMPeopleValidIDs(NSArray<NSString *> *valu
 	return ids;
 }
 
+static BOOL IMPeopleUUIDv4Valid(NSString *value) {
+	if (![value isKindOfClass:[NSString class]] || value.length != 36) return NO;
+	NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:value];
+	if (!uuid) return NO;
+	NSString *canonical = uuid.UUIDString.lowercaseString;
+	NSString *raw = value.lowercaseString;
+	if (![raw isEqualToString:canonical]) return NO;
+	unichar variant = [canonical characterAtIndex:19];
+	return [canonical characterAtIndex:14] == '4' && (variant == '8' || variant == '9' || variant == 'a' || variant == 'b');
+}
+
 static void IMPeopleParseProfile(id json, NSError *requestError, IMPersonProfileCompletion completion) {
 	if (requestError) {
 		completion(nil, requestError);
@@ -80,6 +91,11 @@ static void IMPeopleParseProfile(id json, NSError *requestError, IMPersonProfile
                                     completion:(IMPersonProfileCompletion)completion {
 	if (![personId isKindOfClass:[NSString class]] || personId.length == 0) {
 		NSError *error = IMPeopleError(_(@"A person ID is required."));
+		IMPeopleAsync(^{ completion(nil, error); });
+		return nil;
+	}
+	if (featureFaceAssetId != nil && !IMPeopleUUIDv4Valid(featureFaceAssetId)) {
+		NSError *error = IMPeopleError(_(@"The featured photo must be a valid asset ID."));
 		IMPeopleAsync(^{ completion(nil, error); });
 		return nil;
 	}

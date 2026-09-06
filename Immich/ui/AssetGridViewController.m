@@ -144,6 +144,10 @@ static const CGFloat kCellSpacing = 2;
 
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
 	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
+	if (indexPath.item < (NSInteger)self.assets.count && self.selectionHandler) {
+		self.selectionHandler(self.assets[indexPath.item]);
+		return;
+	}
 	AssetViewController *viewer = [AssetViewController viewerWithAssets:self.assets startIndex:indexPath.item];
 	viewer.zoomSource = self;
 	viewer.presentSourceImageView = ((TimelineCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;

@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef NSURLSessionTask *_Nullable (^IMAssetGridPageLoader)(NSInteger page,
 	void (^completion)(NSArray<IMAsset *> *_Nullable assets, NSString *_Nullable nextPage, NSError *_Nullable error));
+typedef void (^IMAssetGridSelectionHandler)(IMAsset *asset);
 
 @interface AssetGridViewController : UIViewController
 
@@ -12,6 +13,8 @@ typedef NSURLSessionTask *_Nullable (^IMAssetGridPageLoader)(NSInteger page,
 
 @property (nonatomic, copy, nullable) NSString *nextPageToken;
 @property (nonatomic, copy, nullable) IMAssetGridPageLoader pageLoader;
+
+@property (nonatomic, copy, nullable) IMAssetGridSelectionHandler selectionHandler;
 
 @end
 

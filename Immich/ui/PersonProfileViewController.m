@@ -1,6 +1,9 @@
 #import "PersonProfileViewController.h"
 #import "IMPeopleApi.h"
 #import "IMPersonStatistics.h"
+#import "IMSearchApi.h"
+#import "IMApiClient.h"
+#import "AssetGridViewController.h"
 #import "PersonMergeViewController.h"
 #import "common.h"
 
@@ -10,6 +13,7 @@ typedef NS_ENUM(NSInteger, IMPersonProfileFieldRow) {
 	IMPersonProfileFieldFavorite,
 	IMPersonProfileFieldHidden,
 	IMPersonProfileFieldColor,
+	IMPersonProfileFieldFeaturedPhoto,
 	IMPersonProfileFieldCount,
 };
 
@@ -28,7 +32,8 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 @property (nonatomic, copy) NSString *editedName;
 @property (nonatomic, copy, nullable) NSString *editedBirthDate;
 @property (nonatomic, copy, nullable) NSString *editedColor;
-@property (nonatomic) BOOL editedFavorite;
+@property (nonatomic, copy, nullable) NSString *editedFeatureFaceAssetId;
+	@property (nonatomic) BOOL editedFavorite;
 @property (nonatomic) BOOL editedHidden;
 @property (nonatomic, strong) UIRefreshControl *refresh;
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -37,6 +42,9 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 @property (nonatomic) NSUInteger loadGeneration;
 @property (nonatomic, strong, nullable) NSURLSessionTask *profileTask;
 @property (nonatomic, strong, nullable) NSURLSessionTask *statisticsTask;
+@property (nonatomic, strong, nullable) NSURLSessionTask *thumbnailTask;
+@property (nonatomic, strong, nullable) UIImage *thumbnailImage;
+@property (nonatomic) BOOL skipNextAppearanceReload;
 @end
 
 @implementation PersonProfileViewController
@@ -57,6 +65,7 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 - (void)dealloc {
 	[self.profileTask cancel];
 	[self.statisticsTask cancel];
+	[self.thumbnailTask cancel];
 }
 
 - (void)viewDidLoad {
@@ -84,6 +93,10 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
+	if (self.skipNextAppearanceReload) {
+		self.skipNextAppearanceReload = NO;
+		return;
+	}
 	if (self.isViewLoaded && !self.loading && !self.saving && self.profile) [self reloadProfile];
 }
 
@@ -118,9 +131,12 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 		strongSelf.editedName = person.name ?: @"";
 		strongSelf.editedBirthDate = person.birthDate;
 		strongSelf.editedColor = person.color;
+		strongSelf.editedFeatureFaceAssetId = nil;
+		strongSelf.thumbnailImage = nil;
 		strongSelf.editedFavorite = person.isFavorite;
 		strongSelf.editedHidden = person.isHidden;
 		strongSelf.title = person.name.length ? person.name : (strongSelf.displayName.length ? strongSelf.displayName : _(@"Person"));
+		[strongSelf loadThumbnail];
 		strongSelf.navigationItem.rightBarButtonItem.enabled = YES;
 		[strongSelf.tableView reloadData];
 		strongSelf.statisticsTask = [IMPeopleApi statisticsForPersonId:strongSelf.personId completion:^(IMPersonStatistics *statistics, NSError *statisticsError) {
@@ -139,6 +155,34 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 			inner.statusLabel.text = nil;
 			[inner.tableView reloadData];
 		}];
+	}];
+}
+
+- (void)loadThumbnail {
+	[self.thumbnailTask cancel];
+	self.thumbnailTask = nil;
+	if (!self.personId.length) return;
+	NSUInteger generation = self.loadGeneration;
+	__weak typeof(self) weakSelf = self;
+	self.thumbnailTask = [IMSearchApi thumbnailDataForPersonId:self.personId completion:^(NSData *data, NSError *error) {
+		PersonProfileViewController *strongSelf = weakSelf;
+		if (!strongSelf || generation != strongSelf.loadGeneration) return;
+		strongSelf.thumbnailTask = nil;
+		if (error || data.length == 0) {
+			[strongSelf.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:IMPersonProfileFieldFeaturedPhoto inSection:IMPersonProfileSectionFields]]
+			                                  withRowAnimation:UITableViewRowAnimationNone];
+			return;
+		}
+		dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+			UIImage *image = [UIImage imageWithData:data];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				PersonProfileViewController *inner = weakSelf;
+				if (!inner || generation != inner.loadGeneration) return;
+				inner.thumbnailImage = image;
+				[inner.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:IMPersonProfileFieldFeaturedPhoto inSection:IMPersonProfileSectionFields]]
+				                                  withRowAnimation:UITableViewRowAnimationNone];
+			});
+		});
 	}];
 }
 
@@ -239,6 +283,40 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)chooseFeaturedPhoto {
+	if (self.saving || self.loading) return;
+	__weak typeof(self) weakSelf = self;
+	[self.tableView setUserInteractionEnabled:NO];
+	[IMSearchApi metadataSearchWithPersonId:self.personId page:1 completion:^(NSArray<IMAsset *> *assets, NSString *nextPage, NSError *error) {
+		PersonProfileViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		strongSelf.tableView.userInteractionEnabled = YES;
+		if (error || !assets) {
+			[strongSelf showError:error ?: [NSError errorWithDomain:IMApiErrorDomain code:0 userInfo:@{NSLocalizedDescriptionKey: _(@"The person’s photos could not be loaded.")}]];
+			return;
+		}
+		AssetGridViewController *grid = [AssetGridViewController gridWithTitle:_(@"Choose featured photo") assets:assets];
+		grid.nextPageToken = nextPage;
+		__weak PersonProfileViewController *weakProfile = strongSelf;
+		grid.pageLoader = ^NSURLSessionTask *_Nullable(NSInteger page, void (^pageCompletion)(NSArray<IMAsset *> *_Nullable, NSString *_Nullable, NSError *_Nullable)) {
+			PersonProfileViewController *inner = weakProfile;
+			if (!inner) return nil;
+			return [IMSearchApi metadataSearchWithPersonId:inner.personId page:page completion:pageCompletion];
+		};
+		grid.selectionHandler = ^(IMAsset *asset) {
+			PersonProfileViewController *inner = weakSelf;
+			if (!inner || !asset.assetId.length) return;
+			inner.editedFeatureFaceAssetId = asset.assetId;
+			inner.skipNextAppearanceReload = YES;
+			[inner.navigationController popViewControllerAnimated:YES];
+			[inner.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:IMPersonProfileFieldFeaturedPhoto inSection:IMPersonProfileSectionFields]]
+			                                  withRowAnimation:UITableViewRowAnimationNone];
+			inner.navigationItem.rightBarButtonItem.enabled = YES;
+		};
+		[strongSelf.navigationController pushViewController:grid animated:YES];
+	}];
+}
+
 - (void)showValidation:(NSString *)message {
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Invalid value") message:message preferredStyle:UIAlertControllerStyleAlert];
 	[alert addAction:[UIAlertAction actionWithTitle:_(@"OK") style:UIAlertActionStyleDefault handler:nil]];
@@ -275,9 +353,9 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 	                         name:name
 	                    birthDate:birthDate
 	                       hidden:@(self.editedHidden)
-	                     favorite:@(self.editedFavorite)
-	                        color:color
-	             featureFaceAssetId:nil
+		                       favorite:@(self.editedFavorite)
+		                          color:color
+	             featureFaceAssetId:self.editedFeatureFaceAssetId
 	                    completion:^(IMPersonProfile *updated, NSError *error) {
 		PersonProfileViewController *strongSelf = weakSelf;
 		if (!strongSelf || generation != strongSelf.loadGeneration) return;
@@ -291,10 +369,13 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 		strongSelf.editedName = updated.name ?: @"";
 		strongSelf.editedBirthDate = updated.birthDate;
 		strongSelf.editedColor = updated.color;
+		strongSelf.editedFeatureFaceAssetId = nil;
+		strongSelf.thumbnailImage = nil;
 		strongSelf.editedFavorite = updated.isFavorite;
 		strongSelf.editedHidden = updated.isHidden;
 		strongSelf.title = updated.name.length ? updated.name : (strongSelf.displayName.length ? strongSelf.displayName : _(@"Person"));
 		[strongSelf.tableView reloadData];
+		[strongSelf loadThumbnail];
 		if (strongSelf.onSaved) strongSelf.onSaved(updated);
 	}];
 }
@@ -349,12 +430,13 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 	if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
 	cell.accessoryView = nil;
 	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.imageView.image = nil;
 	cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
 	cell.accessibilityValue = nil;
 	if (@available(iOS 13.0, *)) cell.textLabel.textColor = UIColor.labelColor;
 	else cell.textLabel.textColor = UIColor.blackColor;
 	if (indexPath.section == IMPersonProfileSectionFields) {
-		NSArray<NSString *> *titles = @[ _(@"Name"), _(@"Date of birth"), _(@"Favorite"), _(@"Hidden"), _(@"Color") ];
+		NSArray<NSString *> *titles = @[ _(@"Name"), _(@"Date of birth"), _(@"Favorite"), _(@"Hidden"), _(@"Color"), _(@"Featured photo") ];
 		cell.textLabel.text = titles[indexPath.row];
 		if (indexPath.row == IMPersonProfileFieldName) {
 			cell.detailTextLabel.text = self.editedName.length ? self.editedName : _(@"Unnamed");
@@ -374,9 +456,13 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 			[toggle addTarget:self action:@selector(hiddenChanged:) forControlEvents:UIControlEventValueChanged];
 			cell.accessoryView = toggle;
 			cell.accessibilityValue = self.editedHidden ? _(@"On") : _(@"Off");
-		} else {
+		} else if (indexPath.row == IMPersonProfileFieldColor) {
 			cell.detailTextLabel.text = [self valueOrUnset:self.editedColor];
 			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		} else {
+			cell.detailTextLabel.text = self.editedFeatureFaceAssetId.length ? _(@"New photo selected") : (self.profile.thumbnailPath.length ? _(@"Current photo") : _(@"Not set"));
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+			cell.imageView.image = self.thumbnailImage;
 		}
 		return cell;
 	}
@@ -403,6 +489,7 @@ typedef NS_ENUM(NSInteger, IMPersonProfileSection) {
 		if (indexPath.row == IMPersonProfileFieldName) [self editName];
 		else if (indexPath.row == IMPersonProfileFieldBirthDate) [self editBirthDate];
 		else if (indexPath.row == IMPersonProfileFieldColor) [self editColor];
+		else if (indexPath.row == IMPersonProfileFieldFeaturedPhoto) [self chooseFeaturedPhoto];
 	} else if (indexPath.section == IMPersonProfileSectionActions) {
 		if (indexPath.row == 0) {
 			PersonMergeViewController *merge = [[PersonMergeViewController alloc] initWithTargetPersonId:self.personId targetName:self.profile.name];
