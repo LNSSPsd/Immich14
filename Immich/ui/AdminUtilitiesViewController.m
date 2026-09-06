@@ -1,5 +1,9 @@
 #import "AdminUtilitiesViewController.h"
+#import "IMAdminApi.h"
 #import "IMAdminUtilityApi.h"
+#import "IMAdminNotificationApi.h"
+#import "IMAdminUser.h"
+#import "IMApiClient.h"
 #import "IMSystemConfigApi.h"
 #import "IMMaintenanceDetectInstall.h"
 #import "IMTestEmailResponse.h"
@@ -8,6 +12,7 @@
 typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 	IMAdminUtilityRowUnlinkOAuth = 0,
 	IMAdminUtilityRowDetectInstall,
+	IMAdminUtilityRowSendNotification,
 	IMAdminUtilityRowTestEmail,
 	IMAdminUtilityRowCount,
 };
@@ -15,6 +20,7 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 @interface AdminUtilitiesViewController ()
 @property (nonatomic) BOOL mutating;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, weak) UIAlertAction *notificationSendAction;
 @end
 
 @implementation AdminUtilitiesViewController
@@ -54,6 +60,10 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 		case IMAdminUtilityRowDetectInstall:
 			cell.textLabel.text = _(@"Detect existing install");
 			cell.detailTextLabel.text = _(@"Check storage folders for readable and writable install markers.");
+			break;
+		case IMAdminUtilityRowSendNotification:
+			cell.textLabel.text = _(@"Send notification");
+			cell.detailTextLabel.text = _(@"Create an in-app notification for an active user.");
 			break;
 		case IMAdminUtilityRowTestEmail:
 			cell.textLabel.text = _(@"Send test email");
@@ -114,6 +124,138 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 		}];
 	}]];
 	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)composeNotificationForUser:(IMAdminUser *)user {
+	if (!user || self.mutating || !self.viewIfLoaded.window) return;
+	NSString *recipient = user.name.length ? [NSString stringWithFormat:_(@"%@\n%@"), user.name, user.email] : user.email;
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Send notification")
+	                                                                 message:recipient
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Title");
+		field.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Description (optional)");
+		field.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+	}];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Send") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AdminUtilitiesViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *title = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		NSString *description = [alert.textFields[1].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		if (!title.length) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[strongSelf showError:[NSError errorWithDomain:IMApiErrorDomain
+				                                      code:1
+				                                  userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a notification title.")}]];
+			});
+			return;
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[strongSelf chooseNotificationLevelForUser:user title:title description:description];
+		});
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)chooseNotificationLevelForUser:(IMAdminUser *)user
+	                              title:(NSString *)title
+	                       description:(NSString *)description {
+	if (!user || !title.length || self.mutating || !self.viewIfLoaded.window) return;
+	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Notification severity")
+	                                                                  message:_(@"Choose how the notification should appear.")
+	                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+	__weak typeof(self) weakSelf = self;
+	NSArray<NSArray<NSString *> *> *levels = @[
+		@[ _(@"Info"), @"info" ],
+		@[ _(@"Success"), @"success" ],
+		@[ _(@"Warning"), @"warning" ],
+		@[ _(@"Error"), @"error" ],
+	];
+	for (NSArray<NSString *> *level in levels) {
+		[sheet addAction:[UIAlertAction actionWithTitle:level[0] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+			[weakSelf sendNotificationForUser:user title:title description:description level:level[1]];
+		}]];
+	}
+	[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	if (sheet.popoverPresentationController) {
+		sheet.popoverPresentationController.sourceView = self.view;
+		sheet.popoverPresentationController.sourceRect = self.view.bounds;
+	}
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)sendNotificationForUser:(IMAdminUser *)user
+	                         title:(NSString *)title
+	                  description:(NSString *)description
+	                         level:(NSString *)level {
+	if (!user || !title.length || self.mutating) return;
+	[self setBusy:YES];
+	__weak typeof(self) weakSelf = self;
+	[IMAdminNotificationApi createNotificationForUserId:user.userId
+	                                             title:title
+	                                      description:description.length ? description : nil
+	                                             level:level
+	                                              type:@"Custom"
+	                                            readAt:nil
+	                                              data:nil
+	                                        completion:^(IMNotification *notification, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			AdminUtilitiesViewController *inner = weakSelf;
+			if (!inner) return;
+			[inner setBusy:NO];
+			if (error || !notification) {
+				[inner showError:error ?: [NSError errorWithDomain:IMApiErrorDomain
+				                                             code:2
+				                                         userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid notification.")}]];
+			} else {
+				[inner showMessage:_(@"The notification was created for the selected user.") title:_(@"Notification sent")];
+			}
+		});
+	}];
+}
+
+- (void)sendNotificationTapped {
+	if (self.mutating) return;
+	[self setBusy:YES];
+	__weak typeof(self) weakSelf = self;
+	[IMAdminApi usersIncludingDeleted:NO completion:^(NSArray<IMAdminUser *> *users, NSError *error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			AdminUtilitiesViewController *strongSelf = weakSelf;
+			if (!strongSelf) return;
+			[strongSelf setBusy:NO];
+			if (!strongSelf.viewIfLoaded.window) return;
+			if (error || !users) {
+				[strongSelf showError:error];
+				return;
+			}
+			if (!users.count) {
+				[strongSelf showMessage:_(@"There are no active users to notify.") title:_(@"Send notification")];
+				return;
+			}
+			UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Choose recipient")
+			                                                               message:_(@"Select an active user to receive the in-app notification.")
+			                                                        preferredStyle:UIAlertControllerStyleActionSheet];
+			for (IMAdminUser *user in users) {
+				NSString *label = user.name.length ? [NSString stringWithFormat:_(@"%@ · %@"), user.name, user.email] : user.email;
+				[sheet addAction:[UIAlertAction actionWithTitle:label style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+					[weakSelf dismissViewControllerAnimated:YES completion:^{
+						[weakSelf composeNotificationForUser:user];
+					}];
+				}]];
+			}
+			[sheet addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+			if (sheet.popoverPresentationController) {
+				sheet.popoverPresentationController.sourceView = strongSelf.view;
+				sheet.popoverPresentationController.sourceRect = strongSelf.view.bounds;
+			}
+			[strongSelf presentViewController:sheet animated:YES completion:nil];
+		});
+	}];
 }
 
 - (NSString *)displayNameForFolder:(NSString *)folder {
@@ -207,6 +349,7 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 	switch (indexPath.row) {
 		case IMAdminUtilityRowUnlinkOAuth: [self unlinkOAuthTapped]; break;
 		case IMAdminUtilityRowDetectInstall: [self detectInstallTapped]; break;
+		case IMAdminUtilityRowSendNotification: [self sendNotificationTapped]; break;
 		case IMAdminUtilityRowTestEmail: [self sendTestEmailTapped]; break;
 	}
 }
