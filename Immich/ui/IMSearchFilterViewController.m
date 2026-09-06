@@ -8,6 +8,7 @@
 @property (nonatomic, strong) UIDatePicker *afterPicker;
 @property (nonatomic, strong) UIDatePicker *beforePicker;
 @property (nonatomic, strong) UISegmentedControl *typeControl;
+@property (nonatomic, strong) UISegmentedControl *visibilityControl;
 @property (nonatomic, strong) UISegmentedControl *ratingControl;
 @property (nonatomic, strong) UISwitch *favoriteSwitch;
 @property (nonatomic, strong) UISwitch *notInAlbumSwitch;
@@ -63,7 +64,7 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 		[stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
 	]];
 
-	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, rating, and display options.")];
+	UILabel *hint = [self labelWithText:_(@"Combine dates, media type, visibility, rating, and display options.")];
 	hint.numberOfLines = 0;
 	if (@available(iOS 13.0, *)) hint.textColor = UIColor.secondaryLabelColor;
 	[stack addArrangedSubview:hint];
@@ -73,6 +74,12 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	self.typeControl.accessibilityLabel = _(@"Media type");
 	[stack addArrangedSubview:[self labelWithText:_(@"Media type")]];
 	[stack addArrangedSubview:self.typeControl];
+
+	self.visibilityControl = [[UISegmentedControl alloc] initWithItems:@[ _(@"All"), _(@"Timeline"), _(@"Archive"), _(@"Hidden"), _(@"Locked") ]];
+	self.visibilityControl.selectedSegmentIndex = 0;
+	self.visibilityControl.accessibilityLabel = _(@"Visibility");
+	[stack addArrangedSubview:[self labelWithText:_(@"Visibility")]];
+	[stack addArrangedSubview:self.visibilityControl];
 
 	self.ratingControl = [[UISegmentedControl alloc] initWithItems:@[ _(@"Any"), _(@"Unrated"), @"1", @"2", @"3", @"4", @"5" ]];
 	self.ratingControl.selectedSegmentIndex = 0;
@@ -170,6 +177,9 @@ static NSString *IMSearchFilterISODate(NSDate *date) {
 	}
 	if (self.typeControl.selectedSegmentIndex == 1) criteria[@"type"] = @"IMAGE";
 	if (self.typeControl.selectedSegmentIndex == 2) criteria[@"type"] = @"VIDEO";
+	if (self.visibilityControl.selectedSegmentIndex > 0) {
+		criteria[@"visibility"] = @[ @"timeline", @"archive", @"hidden", @"locked" ][self.visibilityControl.selectedSegmentIndex - 1];
+	}
 	if (self.ratingControl.selectedSegmentIndex == 1) criteria[@"rating"] = [NSNull null];
 	if (self.ratingControl.selectedSegmentIndex >= 2) criteria[@"rating"] = @(self.ratingControl.selectedSegmentIndex - 1);
 	if (self.favoriteSwitch.isOn) criteria[@"isFavorite"] = @YES;
