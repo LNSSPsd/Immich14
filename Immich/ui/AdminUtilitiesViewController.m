@@ -13,6 +13,7 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 	IMAdminUtilityRowUnlinkOAuth = 0,
 	IMAdminUtilityRowDetectInstall,
 	IMAdminUtilityRowSendNotification,
+	IMAdminUtilityRowPreviewTemplate,
 	IMAdminUtilityRowTestEmail,
 	IMAdminUtilityRowCount,
 };
@@ -64,6 +65,10 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 		case IMAdminUtilityRowSendNotification:
 			cell.textLabel.text = _(@"Send notification");
 			cell.detailTextLabel.text = _(@"Create an in-app notification for an active user.");
+			break;
+		case IMAdminUtilityRowPreviewTemplate:
+			cell.textLabel.text = _(@"Preview email template");
+			cell.detailTextLabel.text = _(@"Render a server notification template before changing email settings.");
 			break;
 		case IMAdminUtilityRowTestEmail:
 			cell.textLabel.text = _(@"Send test email");
@@ -258,6 +263,96 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 	}];
 }
 
+- (void)showTemplatePreview:(IMNotificationTemplateResponse *)response {
+	if (!response || !self.viewIfLoaded.window) return;
+	UIViewController *preview = [[UIViewController alloc] init];
+	preview.title = response.name.length ? response.name : _(@"Email template preview");
+	preview.view.backgroundColor = UIColor.systemBackgroundColor;
+	UITextView *textView = [[UITextView alloc] init];
+	textView.translatesAutoresizingMaskIntoConstraints = NO;
+	textView.editable = NO;
+	textView.selectable = YES;
+	textView.scrollEnabled = YES;
+	textView.backgroundColor = UIColor.systemBackgroundColor;
+	textView.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+	NSData *htmlData = [response.html dataUsingEncoding:NSUTF8StringEncoding];
+	NSDictionary *options = @{
+		NSDocumentTypeDocumentAttribute: NSHTMLTextDocumentType,
+		NSCharacterEncodingDocumentAttribute: @(NSUTF8StringEncoding),
+	};
+	NSError *conversionError = nil;
+	NSAttributedString *attributed = htmlData.length
+	    ? [[NSAttributedString alloc] initWithData:htmlData options:options documentAttributes:nil error:&conversionError]
+	    : nil;
+	if (attributed.length > 0) textView.attributedText = attributed;
+	else textView.text = response.html.length ? response.html : _(@"The server returned an empty template.");
+	textView.accessibilityLabel = _(@"Rendered email template");
+	[preview.view addSubview:textView];
+	[NSLayoutConstraint activateConstraints:@[
+		[textView.leadingAnchor constraintEqualToAnchor:preview.view.leadingAnchor constant:12],
+		[textView.trailingAnchor constraintEqualToAnchor:preview.view.trailingAnchor constant:-12],
+		[textView.topAnchor constraintEqualToAnchor:preview.view.safeAreaLayoutGuide.topAnchor constant:8],
+		[textView.bottomAnchor constraintEqualToAnchor:preview.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
+	]];
+	preview.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+	                                                                                              target:self
+	                                                                                              action:@selector(dismissTemplatePreview)];
+	UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:preview];
+	navigationController.modalPresentationStyle = UIModalPresentationPageSheet;
+	[self presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)dismissTemplatePreview {
+	[self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)previewTemplateTapped {
+	if (self.mutating || !self.viewIfLoaded.window) return;
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:_(@"Preview email template")
+	                                                                 message:_(@"Enter the server template name. Leave the body empty to preview its configured template.")
+	                                                          preferredStyle:UIAlertControllerStyleAlert];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Template name");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+		field.placeholder = _(@"Custom template body (optional)");
+		field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		field.autocorrectionType = UITextAutocorrectionTypeNo;
+	}];
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+	__weak typeof(self) weakSelf = self;
+	[alert addAction:[UIAlertAction actionWithTitle:_(@"Preview") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+		AdminUtilitiesViewController *strongSelf = weakSelf;
+		if (!strongSelf) return;
+		NSString *name = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		NSString *customTemplate = [alert.textFields.count > 1 ? alert.textFields[1].text : @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+		if (!name.length) {
+			NSError *validationError = [NSError errorWithDomain:IMApiErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: _(@"Enter a template name.")}];
+			[strongSelf dismissViewControllerAnimated:YES completion:^{
+				AdminUtilitiesViewController *inner = weakSelf;
+				if (inner) [inner showError:validationError];
+			}];
+			return;
+		}
+		[strongSelf setBusy:YES];
+		[IMAdminNotificationApi renderTemplateNamed:name customTemplate:customTemplate completion:^(IMNotificationTemplateResponse *response, NSError *error) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				AdminUtilitiesViewController *inner = weakSelf;
+				if (!inner) return;
+				[inner setBusy:NO];
+				if (error || !response) {
+					[inner showError:error ?: [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The server returned an invalid template preview.")}]];
+				} else {
+					[inner showTemplatePreview:response];
+				}
+			});
+		}];
+	}]];
+	[self presentViewController:alert animated:YES completion:nil];
+}
+
 - (NSString *)displayNameForFolder:(NSString *)folder {
 	NSDictionary *names = @{
 		@"encoded-video": _(@"Encoded video"),
@@ -350,6 +445,7 @@ typedef NS_ENUM(NSInteger, IMAdminUtilityRow) {
 		case IMAdminUtilityRowUnlinkOAuth: [self unlinkOAuthTapped]; break;
 		case IMAdminUtilityRowDetectInstall: [self detectInstallTapped]; break;
 		case IMAdminUtilityRowSendNotification: [self sendNotificationTapped]; break;
+		case IMAdminUtilityRowPreviewTemplate: [self previewTemplateTapped]; break;
 		case IMAdminUtilityRowTestEmail: [self sendTestEmailTapped]; break;
 	}
 }
