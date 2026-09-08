@@ -68,7 +68,7 @@ static BOOL IMAuthSignupBaseURLIsValid(NSURL *baseURL) {
 			completion(nil, error);
 			return;
 		}
-		IMAdminUser *user = [IMAdminUser userWithResponseDictionary:json];
+		IMAdminUser *user = [IMAdminUser userWithCompatibleResponseDictionary:json];
 		completion(user, user ? nil : IMAuthMalformedResponse(_(@"The server returned an invalid administrator response.")));
 	}];
 }

@@ -37,6 +37,7 @@ static NSError *IMAdminUIError(NSString *message) {
 	UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(createTapped)];
 	UIBarButtonItem *tools = [[UIBarButtonItem alloc] initWithTitle:_(@"Tools") style:UIBarButtonItemStylePlain target:self action:@selector(toolsTapped)];
 	self.navigationItem.rightBarButtonItems = @[add, tools];
+	self.navigationItem.leftItemsSupplementBackButton = YES;
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Deleted")
 	                                                                         style:UIBarButtonItemStylePlain
 	                                                                        target:self

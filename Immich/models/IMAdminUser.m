@@ -7,6 +7,14 @@ static id IMAdminValue(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
 }
 
+static long long IMAdminIntegerValue(id value) {
+	if ([value isKindOfClass:[NSNumber class]]) return [value longLongValue];
+	if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+		return [(NSString *)value longLongValue];
+	}
+	return 0;
+}
+
 static BOOL IMAdminStrictString(id value, BOOL nonEmpty) {
 	return [value isKindOfClass:[NSString class]] && (!nonEmpty || [(NSString *)value length] > 0);
 }
@@ -126,11 +134,15 @@ static BOOL IMAdminStrictEnum(id value, NSSet<NSString *> *allowed) {
 		value = IMAdminValue(dictionary[@"shouldChangePassword"]);
 		_shouldChangePassword = [value isKindOfClass:[NSNumber class]] && [value boolValue];
 		value = IMAdminValue(dictionary[@"quotaUsageInBytes"]);
-		_quotaUsageInBytes = [value isKindOfClass:[NSNumber class]] ? [value longLongValue] : 0;
+		_quotaUsageInBytes = IMAdminIntegerValue(value);
 		value = IMAdminValue(dictionary[@"quotaSizeInBytes"]);
-		_quotaSizeInBytes = [value isKindOfClass:[NSNumber class]] ? [value longLongValue] : 0;
+		_quotaSizeInBytes = IMAdminIntegerValue(value);
 		value = IMAdminValue(dictionary[@"deletedAt"]);
 		_deletedAt = [value isKindOfClass:[NSString class]] ? value : nil;
+		id rawLicense = dictionary[@"license"];
+		_license = [rawLicense isKindOfClass:[NSDictionary class]]
+		    ? [IMUserLicense licenseWithDictionary:rawLicense]
+		    : nil;
 	}
 	return self;
 }
@@ -197,6 +209,39 @@ static BOOL IMAdminStrictEnum(id value, NSSet<NSString *> *allowed) {
 	id deletedAt = dictionary[@"deletedAt"];
 	user.deletedAt = [deletedAt isKindOfClass:[NSString class]] ? [deletedAt copy] : nil;
 	return user;
+}
+
++ (nullable instancetype)userWithCompatibleResponseDictionary:(NSDictionary *)dictionary {
+	IMAdminUser *strict = [self userWithResponseDictionary:dictionary];
+	if (strict) return strict;
+	if (![dictionary isKindOfClass:[NSDictionary class]]) return nil;
+
+	id userId = dictionary[@"id"];
+	id name = dictionary[@"name"];
+	id email = dictionary[@"email"];
+	if (!IMAdminStrictString(userId, YES) || !IMAdminStrictString(name, NO) ||
+	    !IMAdminStrictEmail(email)) {
+		return nil;
+	}
+
+	for (NSString *key in @[ @"isAdmin", @"shouldChangePassword" ]) {
+		id value = dictionary[key];
+		if (value != nil && !IMAdminStrictBoolean(value)) return nil;
+	}
+	for (NSString *key in @[ @"avatarColor", @"status", @"profileImagePath", @"oauthId", @"storageLabel" ]) {
+		id value = dictionary[key];
+		if (value != nil && ![value isKindOfClass:[NSNull class]] && ![value isKindOfClass:[NSString class]]) return nil;
+	}
+	for (NSString *key in @[ @"createdAt", @"profileChangedAt", @"updatedAt", @"deletedAt" ]) {
+		id value = dictionary[key];
+		if (value != nil && ![value isKindOfClass:[NSNull class]] && ![value isKindOfClass:[NSString class]]) return nil;
+	}
+	for (NSString *key in @[ @"quotaSizeInBytes", @"quotaUsageInBytes" ]) {
+		id value = dictionary[key];
+		if (value != nil && ![value isKindOfClass:[NSNull class]] &&
+		    ![value isKindOfClass:[NSNumber class]] && ![value isKindOfClass:[NSString class]]) return nil;
+	}
+	return [[self alloc] initWithDictionary:dictionary];
 }
 
 + (NSArray<IMAdminUser *> *)usersWithArray:(NSArray *)array {

@@ -151,7 +151,7 @@ static BOOL IMAdminUsersResponseIsValid(NSArray *values) {
 		return NO;
 	}
 	for (id value in values) {
-		if (![IMAdminUser userWithResponseDictionary:value]) {
+		if (![IMAdminUser userWithCompatibleResponseDictionary:value]) {
 			return NO;
 		}
 	}
@@ -175,7 +175,7 @@ static BOOL IMAdminSessionResponseIsValid(id value) {
 }
 
 static IMAdminUser *IMAdminParseUser(id json) {
-	return [IMAdminUser userWithResponseDictionary:json];
+	return [IMAdminUser userWithCompatibleResponseDictionary:json];
 }
 
 @implementation IMAdminApi

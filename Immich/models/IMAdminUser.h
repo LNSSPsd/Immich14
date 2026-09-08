@@ -24,6 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary;
 + (nullable instancetype)userWithResponseDictionary:(NSDictionary *)dictionary;
++ (nullable instancetype)userWithCompatibleResponseDictionary:(NSDictionary *)dictionary;
 + (NSArray<IMAdminUser *> *)usersWithArray:(NSArray *)array;
 @end
 

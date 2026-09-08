@@ -8,6 +8,7 @@
 #import "AssetViewController.h"
 #import "ExploreViewController.h"
 #import "IMSearchFilterViewController.h"
+#import "MemoriesViewController.h"
 #import "common.h"
 
 typedef NS_ENUM(NSInteger, IMSearchMode) {
@@ -63,6 +64,7 @@ typedef NS_ENUM(NSInteger, IMSearchScope) {
 @property (nonatomic, strong) UISearchController *searchController;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIView *scopeContainer;
+@property (nonatomic, strong) UIView *memoriesRow;
 @property (nonatomic, strong) UISegmentedControl *scopeControl;
 @property (nonatomic, strong) NSLayoutConstraint *scopeHeightConstraint;
 @property (nonatomic, strong) UIActivityIndicatorView *activityIndicator;
@@ -129,6 +131,33 @@ static const CGFloat kScopeBarHeight = 44;
 	                                                                           action:@selector(showSearchTools)];
 	self.definesPresentationContext = YES;
 
+	self.memoriesRow = [[UIView alloc] init];
+	self.memoriesRow.translatesAutoresizingMaskIntoConstraints = NO;
+	if (@available(iOS 13.0, *)) {
+		self.memoriesRow.backgroundColor = UIColor.secondarySystemBackgroundColor;
+	} else {
+		self.memoriesRow.backgroundColor = UIColor.whiteColor;
+	}
+	self.memoriesRow.isAccessibilityElement = YES;
+	self.memoriesRow.accessibilityLabel = _(@"Memories");
+	self.memoriesRow.accessibilityTraits = UIAccessibilityTraitButton;
+	[self.memoriesRow addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
+	                                                                              action:@selector(showMemories)]];
+	[self.view addSubview:self.memoriesRow];
+
+	UILabel *memoriesLabel = [[UILabel alloc] init];
+	memoriesLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	memoriesLabel.text = _(@"Memories");
+	memoriesLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+	memoriesLabel.textColor = UIColor.labelColor;
+	[self.memoriesRow addSubview:memoriesLabel];
+
+	UIImageView *memoriesChevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+	memoriesChevron.translatesAutoresizingMaskIntoConstraints = NO;
+	memoriesChevron.tintColor = UIColor.tertiaryLabelColor;
+	memoriesChevron.contentMode = UIViewContentModeScaleAspectFit;
+	[self.memoriesRow addSubview:memoriesChevron];
+
 	UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
 	layout.minimumInteritemSpacing = kCellSpacing;
 	layout.minimumLineSpacing = kCellSpacing;
@@ -187,7 +216,20 @@ static const CGFloat kScopeBarHeight = 44;
 
 	self.scopeHeightConstraint = [self.scopeContainer.heightAnchor constraintEqualToConstant:0];
 	[NSLayoutConstraint activateConstraints:@[
-		[self.scopeContainer.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+		[self.memoriesRow.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+		[self.memoriesRow.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+		[self.memoriesRow.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+		[self.memoriesRow.heightAnchor constraintEqualToConstant:52],
+
+		[memoriesLabel.leadingAnchor constraintEqualToAnchor:self.memoriesRow.leadingAnchor constant:16],
+		[memoriesLabel.centerYAnchor constraintEqualToAnchor:self.memoriesRow.centerYAnchor],
+		[memoriesLabel.trailingAnchor constraintLessThanOrEqualToAnchor:memoriesChevron.leadingAnchor constant:-8],
+		[memoriesChevron.trailingAnchor constraintEqualToAnchor:self.memoriesRow.trailingAnchor constant:-16],
+		[memoriesChevron.centerYAnchor constraintEqualToAnchor:self.memoriesRow.centerYAnchor],
+		[memoriesChevron.widthAnchor constraintEqualToConstant:12],
+		[memoriesChevron.heightAnchor constraintEqualToConstant:20],
+
+		[self.scopeContainer.topAnchor constraintEqualToAnchor:self.memoriesRow.bottomAnchor],
 		[self.scopeContainer.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
 		[self.scopeContainer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
 		self.scopeHeightConstraint,
@@ -216,6 +258,10 @@ static const CGFloat kScopeBarHeight = 44;
 
 	[self loadBrowseData];
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(peopleDidChange:) name:IMPeopleDidChangeNotification object:nil];
+}
+
+- (void)showMemories {
+	[self.navigationController pushViewController:[[MemoriesViewController alloc] init] animated:YES];
 }
 
 #pragma mark - Browse data
