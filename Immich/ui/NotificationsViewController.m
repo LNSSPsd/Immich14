@@ -34,6 +34,7 @@ static NSString *const kNotificationCellIdentifier = @"notification-cell";
 	self.emptyLabel.adjustsFontForContentSizeCategory = YES;
 	self.emptyLabel.text = _(@"No notifications.");
 	self.tableView.backgroundView = self.emptyLabel;
+	self.navigationItem.leftItemsSupplementBackButton = YES;
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"All")
 	                                                                         style:UIBarButtonItemStylePlain
 	                                                                        target:self

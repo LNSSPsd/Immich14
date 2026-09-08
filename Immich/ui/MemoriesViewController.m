@@ -46,6 +46,7 @@ static const CGFloat kMemorySpacing = 12.0;
 		                                                  target:self
 		                                                  action:@selector(statisticsTapped)];
 	}
+	self.navigationItem.leftItemsSupplementBackButton = YES;
 	self.navigationItem.leftBarButtonItem = statisticsButton;
 	self.navigationItem.leftBarButtonItem.accessibilityLabel = _(@"Memory statistics");
 	if (@available(iOS 13.0, *)) {

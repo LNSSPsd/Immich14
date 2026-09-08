@@ -23,7 +23,6 @@
 #import "DuplicatesViewController.h"
 #import "AdminLibrariesViewController.h"
 #import "AdminServerViewController.h"
-#import "ServerApkLinksViewController.h"
 
 typedef NS_ENUM(NSInteger, IMSettingsSection) {
 	IMSettingsSectionAccount = 0,
@@ -75,7 +74,6 @@ typedef NS_ENUM(NSInteger, IMPreferencesRow) {
 typedef NS_ENUM(NSInteger, IMAboutRow) {
 	IMAboutRowAppVersion = 0,
 	IMAboutRowServerVersion,
-	IMAboutRowAndroidDownloads,
 	IMAboutRowCount,
 };
 
@@ -109,6 +107,8 @@ static NSString *const kActionCellId = @"action";
 	self.tableView.translatesAutoresizingMaskIntoConstraints = NO;
 	self.tableView.dataSource = self;
 	self.tableView.delegate = self;
+	self.tableView.rowHeight = UITableViewAutomaticDimension;
+	self.tableView.estimatedRowHeight = 52.0;
 	[self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:kActionCellId];
 	[self.view addSubview:self.tableView];
 	[NSLayoutConstraint activateConstraints:@[
@@ -471,18 +471,22 @@ static NSString *const kActionCellId = @"action";
 
 - (nullable NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if (section == IMSettingsSectionAdvanced) {
-		return _(@"Only enable this if you understand the risk — it disables TLS certificate "
-		          @"validation for this app's connection to your server (self-signed certs on a "
-		          @"trusted LAN/WireGuard server only).");
+		return _(@"Accepts self-signed certificates. Use only with a trusted server.");
 	}
 	return nil;
 }
 
 - (UITableViewCell *)valueCellWithTitle:(NSString *)title detail:(nullable NSString *)detail {
-	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:kValueCellId];
+	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:kValueCellId];
 	cell.textLabel.text = title;
 	cell.detailTextLabel.text = detail;
-	cell.detailTextLabel.numberOfLines = 0;
+	cell.detailTextLabel.numberOfLines = 1;
+	cell.detailTextLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+	cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+	cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+	cell.detailTextLabel.adjustsFontForContentSizeCategory = YES;
+	cell.accessibilityLabel = title;
+	cell.accessibilityValue = detail;
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	return cell;
 }
@@ -527,79 +531,79 @@ static NSString *const kActionCellId = @"action";
 					return [self valueCellWithTitle:_(@"Storage Used") detail:self.user ? detail : @"—"];
 				}
 					case IMAccountRowSecurity: {
-						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Security") detail:_(@"Password, devices, and API keys")];
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Security") detail:_(@"Password, devices & keys")];
 						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 						return cell;
 					}
 					case IMAccountRowActivity: {
-						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Activity") detail:_(@"Heatmap, onboarding, and license")];
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"Account Activity") detail:_(@"History & license")];
 						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 						return cell;
 					}
 					case IMAccountRowOAuth: {
-						UITableViewCell *cell = [self valueCellWithTitle:_(@"OAuth Account") detail:_(@"Link or unlink your provider account")];
+						UITableViewCell *cell = [self valueCellWithTitle:_(@"OAuth Account") detail:_(@"Linked provider")];
 						cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 						cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 						return cell;
 					}
 				case IMAccountRowLockedPIN: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Locked Photos PIN") detail:_(@"Set, change, or remove PIN")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Locked Photos PIN") detail:_(@"PIN settings")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowTrash: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Trash") detail:_(@"Restore or permanently delete photos")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Trash") detail:_(@"Deleted photos")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowSharedLinks: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Shared Links") detail:_(@"Manage public links")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Shared Links") detail:_(@"Public links")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowArchive: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Archive") detail:_(@"Photos removed from the timeline")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Archive") detail:_(@"Archived photos")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
 				}
 				case IMAccountRowHidden: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Hidden Photos") detail:_(@"Photos hidden from normal views")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Hidden Photos") detail:_(@"Hidden photos")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
 				}
 				case IMAccountRowPartners: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Partner Sharing") detail:_(@"Share your library with another user")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Partner Sharing") detail:_(@"Shared libraries")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowTags: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Tags") detail:_(@"Browse and organize tagged photos")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Tags") detail:_(@"Tagged photos")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowFolders: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Folders") detail:_(@"Browse photos by original folder")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Folders") detail:_(@"Original folders")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowAdministration: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Administration") detail:_(@"Manage server users")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Administration") detail:_(@"Server controls")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowPeople: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"People") detail:_(@"Browse, name, and hide people")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"People") detail:_(@"Faces & people")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
 				}
 				case IMAccountRowDuplicates: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Duplicates") detail:_(@"Review and resolve duplicate photos")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"Duplicates") detail:_(@"Duplicate photos")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
@@ -638,7 +642,7 @@ static NSString *const kActionCellId = @"action";
 				                               on:IMPrefs.shared.lockedPhotosBiometricEnabled
 				                           action:@selector(lockedPhotosBiometricSwitchChanged:)];
 				case IMPreferencesRowUserPreferences: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"User Preferences") detail:_(@"Email, memories, people, and library defaults")];
+					UITableViewCell *cell = [self valueCellWithTitle:_(@"User Preferences") detail:_(@"Immich preferences")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 					return cell;
@@ -670,15 +674,8 @@ static NSString *const kActionCellId = @"action";
 				case IMAboutRowAppVersion:
 					return [self valueCellWithTitle:_(@"App Version")
 					                            detail:[NSString stringWithFormat:@"%s (%s)", APP_VERSION_STRING, APP_COMMIT_HASH]];
-				case IMAboutRowServerVersion:
+				default:
 					return [self valueCellWithTitle:_(@"Server Version") detail:self.serverVersion ?: @"—"];
-				default: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Android App Downloads")
-					                                            detail:_(@"Download the APK for this server version")];
-					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-					return cell;
-				}
 		}
 	}
 }
@@ -765,11 +762,6 @@ static NSString *const kActionCellId = @"action";
 	}
 	if (indexPath.section == IMSettingsSectionPreferences && indexPath.row == IMPreferencesRowClearCache) {
 		[self clearCacheTapped];
-		return;
-	}
-	if (indexPath.section == IMSettingsSectionAbout && indexPath.row == IMAboutRowAndroidDownloads) {
-		[self.navigationController pushViewController:[[ServerApkLinksViewController alloc] initWithStyle:UITableViewStyleInsetGrouped]
-		                                     animated:YES];
 		return;
 	}
 }
