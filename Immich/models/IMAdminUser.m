@@ -219,8 +219,9 @@ static BOOL IMAdminStrictEnum(id value, NSSet<NSString *> *allowed) {
 	id userId = dictionary[@"id"];
 	id name = dictionary[@"name"];
 	id email = dictionary[@"email"];
+	id isAdmin = dictionary[@"isAdmin"];
 	if (!IMAdminStrictString(userId, YES) || !IMAdminStrictString(name, NO) ||
-	    !IMAdminStrictEmail(email)) {
+	    !IMAdminStrictEmail(email) || !IMAdminStrictBoolean(isAdmin)) {
 		return nil;
 	}
 
