@@ -25,6 +25,20 @@ static NSString *IMUserPathComponent(NSString *value) {
 	return [value stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: value;
 }
 
+static IMUser *IMUserFromCurrentResponse(NSDictionary *json) {
+	IMUser *user = [IMUser userWithResponseDictionary:json];
+	if (user) return user;
+	id userId = json[@"id"];
+	id name = json[@"name"];
+	id email = json[@"email"];
+	if (![userId isKindOfClass:[NSString class]] || [(NSString *)userId length] == 0 ||
+	    ![name isKindOfClass:[NSString class]] || ![email isKindOfClass:[NSString class]] ||
+	    [(NSString *)email length] == 0) {
+		return nil;
+	}
+	return [[IMUser alloc] initWithDictionary:json];
+}
+
 @implementation IMUserApi
 
 static IMUser *sCachedUser;
@@ -37,7 +51,7 @@ static IMUser *sCachedUser;
 				completion(nil, error ?: IMUserMalformedResponse());
 				return;
 			}
-			IMUser *user = [IMUser userWithResponseDictionary:(NSDictionary *)json];
+			IMUser *user = IMUserFromCurrentResponse((NSDictionary *)json);
 			if (!user) {
 				completion(nil, IMUserMalformedResponse());
 				return;
@@ -79,7 +93,7 @@ static IMUser *sCachedUser;
 + (void)updateCurrentUserWithFields:(NSDictionary<NSString *,id> *)fields completion:(void (^)(IMUser *, NSError *))completion {
 	[[IMApiClient shared] PUT:@"/users/me" body:fields completion:^(id json, NSError *error) {
 		if (error || ![json isKindOfClass:NSDictionary.class]) { completion(nil, error ?: IMUserMalformedResponse()); return; }
-		IMUser *user = [IMUser userWithResponseDictionary:json];
+		IMUser *user = IMUserFromCurrentResponse(json);
 		if (!user) { completion(nil, IMUserMalformedResponse()); return; }
 		sCachedUser = user;
 		completion(user, nil);

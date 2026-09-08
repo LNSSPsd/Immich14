@@ -5,6 +5,16 @@ static id IMValueOrNil(id value) {
 	return [value isKindOfClass:[NSNull class]] ? nil : value;
 }
 
+static long long IMUserIntegerValue(id value) {
+	if ([value isKindOfClass:[NSNumber class]]) {
+		return [value longLongValue];
+	}
+	if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+		return [(NSString *)value longLongValue];
+	}
+	return 0;
+}
+
 @interface IMUser ()
 @property (nonatomic, copy) NSString *userId;
 @property (nonatomic, copy) NSString *name;
@@ -45,9 +55,9 @@ static id IMValueOrNil(id value) {
 		id admin = IMValueOrNil(dict[@"isAdmin"]);
 		_isAdmin = [admin isKindOfClass:[NSNumber class]] && [admin boolValue];
 		id usage = IMValueOrNil(dict[@"quotaUsageInBytes"]);
-		_quotaUsageInBytes = [usage isKindOfClass:[NSNumber class]] ? [usage longLongValue] : 0;
+		_quotaUsageInBytes = IMUserIntegerValue(usage);
 		id size = IMValueOrNil(dict[@"quotaSizeInBytes"]);
-		_quotaSizeInBytes = [size isKindOfClass:[NSNumber class]] ? [size longLongValue] : 0;
+		_quotaSizeInBytes = IMUserIntegerValue(size);
 	}
 	return self;
 }

@@ -77,8 +77,11 @@
 		if (@available(iOS 13.0, *)) {
 			img = [UIImage systemImageNamed:symbols[i]];
 		}
-		vc.tabBarItem = [[UITabBarItem alloc] initWithTitle:title image:img tag:i];
-		[tabs addObject:[[UINavigationController alloc] initWithRootViewController:vc]];
+		UITabBarItem *tabBarItem = [[UITabBarItem alloc] initWithTitle:title image:img tag:i];
+		vc.tabBarItem = tabBarItem;
+		UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:vc];
+		navigation.tabBarItem = tabBarItem;
+		[tabs addObject:navigation];
 	}];
 
 	self.viewControllers = tabs;
