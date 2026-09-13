@@ -20,6 +20,34 @@ static NSString *const kDefaultsAuthKind = @"IMSessionAuthKind"; // "apiKey"; ab
 static NSString *const kDefaultsPasswordChangeRequired = @"IMSessionPasswordChangeRequired";
 static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 
+#if IM_TROLLSTORE
+#include <stdlib.h>
+
+static NSString *IMSessionSharedStateDirectory(void) {
+	const char *sharedPath = getenv("IM_BACKUP_SUPPORT_PATH");
+	NSString *support = (sharedPath && sharedPath[0] != '\0')
+	    ? [NSString stringWithUTF8String:sharedPath]
+	    : nil;
+	if (support.length == 0) {
+		support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+	                                             NSUserDomainMask,
+	                                             YES).firstObject;
+	}
+	if (support.length == 0) {
+		support = NSTemporaryDirectory();
+	}
+	[[NSFileManager defaultManager] createDirectoryAtPath:support
+	                          withIntermediateDirectories:YES
+	                                           attributes:nil
+	                                                error:nil];
+	return support;
+}
+
+static NSString *IMSessionSharedStateFilePath(void) {
+	return [IMSessionSharedStateDirectory() stringByAppendingPathComponent:@"immich-shared-session.plist"];
+}
+#endif
+
 static void IMClearAccountMediaCaches(void) {
 	NSString *temporary = NSTemporaryDirectory();
 	if (temporary.length == 0) return;
@@ -68,16 +96,25 @@ static void IMClearAccountScopedState(void) {
 	if (self) {
 		NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 		NSString *urlString = [defaults stringForKey:kDefaultsBaseURL];
+		NSString *userIdValue = [defaults stringForKey:kDefaultsUserId];
+		NSString *authKindValue = [defaults stringForKey:kDefaultsAuthKind];
+#if IM_TROLLSTORE
+		NSDictionary *shared = [NSDictionary dictionaryWithContentsOfFile:IMSessionSharedStateFilePath()];
+		if (shared) {
+			urlString = shared[kDefaultsBaseURL] ?: urlString;
+			userIdValue = shared[kDefaultsUserId] ?: userIdValue;
+			authKindValue = shared[kDefaultsAuthKind] ?: authKindValue;
+		}
+#endif
 		NSString *token = [self keychainToken];
 		if (urlString.length > 0 && token.length > 0) {
 			_baseURL = [NSURL URLWithString:urlString];
 			_accessToken = token;
-			_userId = [defaults stringForKey:kDefaultsUserId];
-			_authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
+			_userId = userIdValue;
+			_authKind = [authKindValue isEqualToString:kAuthKindAPIKeyValue]
 			    ? IMSessionAuthKindAPIKey
 			    : IMSessionAuthKindBearer;
-			_passwordChangeRequired = (_authKind == IMSessionAuthKindBearer) &&
-			                         [defaults boolForKey:kDefaultsPasswordChangeRequired];
+			_passwordChangeRequired = NO;
 		}
 	}
 	return self;
@@ -91,17 +128,26 @@ static void IMClearAccountScopedState(void) {
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 	(void)[defaults synchronize];
 	NSString *urlString = [defaults stringForKey:kDefaultsBaseURL];
+	NSString *userIdValue = [defaults stringForKey:kDefaultsUserId];
+	NSString *authKindValue = [defaults stringForKey:kDefaultsAuthKind];
+#if IM_TROLLSTORE
+	NSDictionary *shared = [NSDictionary dictionaryWithContentsOfFile:IMSessionSharedStateFilePath()];
+	if (shared) {
+		urlString = shared[kDefaultsBaseURL] ?: urlString;
+		userIdValue = shared[kDefaultsUserId] ?: userIdValue;
+		authKindValue = shared[kDefaultsAuthKind] ?: authKindValue;
+	}
+#endif
 	NSString *token = [self keychainToken];
 	NSURL *url = urlString.length > 0 ? [NSURL URLWithString:urlString] : nil;
 	if (url && token.length > 0) {
 		self.baseURL = url;
 		self.accessToken = token;
-		self.userId = [defaults stringForKey:kDefaultsUserId];
-		self.authKind = [[defaults stringForKey:kDefaultsAuthKind] isEqualToString:kAuthKindAPIKeyValue]
+		self.userId = userIdValue;
+		self.authKind = [authKindValue isEqualToString:kAuthKindAPIKeyValue]
 		    ? IMSessionAuthKindAPIKey
 		    : IMSessionAuthKindBearer;
-		self.passwordChangeRequired = (self.authKind == IMSessionAuthKindBearer) &&
-		                              [defaults boolForKey:kDefaultsPasswordChangeRequired];
+		self.passwordChangeRequired = NO;
 	} else {
 		self.baseURL = nil;
 		self.accessToken = nil;
@@ -133,6 +179,13 @@ static void IMClearAccountScopedState(void) {
 		[defaults removeObjectForKey:kDefaultsAuthKind];
 	}
 	[defaults setBool:passwordChangeRequired forKey:kDefaultsPasswordChangeRequired];
+#if IM_TROLLSTORE
+	NSMutableDictionary *shared = [NSMutableDictionary dictionary];
+	shared[kDefaultsBaseURL] = baseURL.absoluteString;
+	if (userId) shared[kDefaultsUserId] = userId;
+	if (kind == IMSessionAuthKindAPIKey) shared[kDefaultsAuthKind] = kAuthKindAPIKeyValue;
+	[shared writeToFile:IMSessionSharedStateFilePath() atomically:YES];
+#endif
 
 	[self setKeychainToken:secret];
 
@@ -186,6 +239,9 @@ static void IMClearAccountScopedState(void) {
 	[defaults removeObjectForKey:kDefaultsUserId];
 	[defaults removeObjectForKey:kDefaultsAuthKind];
 	[defaults removeObjectForKey:kDefaultsPasswordChangeRequired];
+#if IM_TROLLSTORE
+	(void)[[NSFileManager defaultManager] removeItemAtPath:IMSessionSharedStateFilePath() error:NULL];
+#endif
 	[self deleteKeychainToken];
 
 	self.baseURL = nil;

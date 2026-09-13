@@ -1,5 +1,7 @@
 #import "IMPrefs.h"
 #import "IMAssetApi.h"
+#import "common.h"
+#include <stdlib.h>
 
 static NSString *const kKeyWifiOnlyUpload = @"IMPrefsWifiOnlyUpload";
 static NSString *const kKeyThumbnailQuality = @"IMPrefsThumbnailQuality";
@@ -8,6 +10,32 @@ static NSString *const kKeyBackupEnabled = @"IMPrefsBackupEnabled";
 static NSString *const kKeyLockedPhotosBiometricEnabled = @"IMPrefsLockedPhotosBiometricEnabled";
 
 NSNotificationName const IMPrefsBackupEnabledDidChangeNotification = @"IMPrefsBackupEnabledDidChangeNotification";
+
+#if IM_TROLLSTORE
+static NSString *IMPrefsSharedStateDirectory(void) {
+	const char *sharedPath = getenv("IM_BACKUP_SUPPORT_PATH");
+	NSString *support = (sharedPath && sharedPath[0] != '\0')
+	    ? [NSString stringWithUTF8String:sharedPath]
+	    : nil;
+	if (support.length == 0) {
+		support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+	                                             NSUserDomainMask,
+	                                             YES).firstObject;
+	}
+	if (support.length == 0) {
+		support = NSTemporaryDirectory();
+	}
+	[[NSFileManager defaultManager] createDirectoryAtPath:support
+	                          withIntermediateDirectories:YES
+	                                           attributes:nil
+	                                                error:nil];
+	return support;
+}
+
+static NSString *IMPrefsSharedStateFilePath(void) {
+	return [IMPrefsSharedStateDirectory() stringByAppendingPathComponent:@"immich-shared-prefs.plist"];
+}
+#endif
 
 @interface IMPrefs ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *backing;
@@ -35,6 +63,12 @@ NSNotificationName const IMPrefsBackupEnabledDidChangeNotification = @"IMPrefsBa
 		    ? [[NSUserDefaults standardUserDefaults] persistentDomainForName:bundleId]
 		    : nil;
 		_backing = [NSMutableDictionary dictionaryWithDictionary:std ?: @{}];
+#if IM_TROLLSTORE
+		NSDictionary *shared = [NSDictionary dictionaryWithContentsOfFile:IMPrefsSharedStateFilePath()];
+		if (shared) {
+			[_backing addEntriesFromDictionary:shared];
+		}
+#endif
 		[self applyDefaultValuesLocked];
 	}
 	return self;
@@ -78,6 +112,9 @@ NSNotificationName const IMPrefsBackupEnabledDidChangeNotification = @"IMPrefsBa
 		} else {
 			[defaults removeObjectForKey:key];
 		}
+#if IM_TROLLSTORE
+		[self.backing writeToFile:IMPrefsSharedStateFilePath() atomically:YES];
+#endif
 	});
 }
 
@@ -109,6 +146,12 @@ NSNotificationName const IMPrefsBackupEnabledDidChangeNotification = @"IMPrefsBa
 		NSString *bundleId = [NSBundle mainBundle].bundleIdentifier;
 		NSDictionary *persisted = bundleId ? [defaults persistentDomainForName:bundleId] : nil;
 		self.backing = [NSMutableDictionary dictionaryWithDictionary:persisted ?: @{}];
+#if IM_TROLLSTORE
+		NSDictionary *shared = [NSDictionary dictionaryWithContentsOfFile:IMPrefsSharedStateFilePath()];
+		if (shared) {
+			[self.backing addEntriesFromDictionary:shared];
+		}
+#endif
 		[self applyDefaultValuesLocked];
 	});
 }
