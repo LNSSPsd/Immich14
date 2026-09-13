@@ -1,5 +1,5 @@
 #import "LocalAssetGridViewController.h"
-#import "LocalAssetPreviewViewController.h"
+#import "AssetViewController.h"
 #import "common.h"
 #import <Photos/Photos.h>
 #import <math.h>
@@ -118,7 +118,7 @@ static NSString *IMLocalAssetAccessibilityDate(NSDate *date) {
 
 @end
 
-@interface LocalAssetGridViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
+@interface LocalAssetGridViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, IMZoomTransitionSource>
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, copy) NSArray<PHAsset *> *assets;
@@ -223,8 +223,44 @@ static const CGFloat kCellSpacing = 2;
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
 	[collectionView deselectItemAtIndexPath:indexPath animated:YES];
 	if (indexPath.item >= self.assets.count) return;
-	LocalAssetPreviewViewController *preview = [LocalAssetPreviewViewController previewWithAsset:self.assets[indexPath.item]];
-	[self.navigationController pushViewController:preview animated:YES];
+	NSMutableArray<IMAsset *> *items = [NSMutableArray arrayWithCapacity:self.assets.count];
+	NSMutableDictionary<NSString *, PHAsset *> *localAssets = [NSMutableDictionary dictionaryWithCapacity:self.assets.count];
+	for (PHAsset *asset in self.assets) {
+		IMAsset *standIn = [AssetViewController viewerAssetForLocalAsset:asset];
+		[items addObject:standIn];
+		localAssets[standIn.assetId] = asset;
+	}
+	AssetViewController *viewer = [AssetViewController viewerWithAssets:items
+	                                                        startIndex:indexPath.item
+	                                                       localAssets:localAssets];
+	viewer.zoomSource = self;
+	viewer.presentSourceImageView = ((IMLocalAssetCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;
+	[self presentViewController:viewer animated:YES completion:nil];
+}
+
+#pragma mark - IMZoomTransitionSource
+
+- (nullable UIImageView *)zoomTransitionImageViewForAssetId:(NSString *)assetId {
+	NSString *localIdentifier = [AssetViewController localIdentifierForViewerAssetId:assetId];
+	if (!localIdentifier) {
+		return nil;
+	}
+	NSUInteger index = [self.assets indexOfObjectPassingTest:^BOOL(PHAsset *asset, NSUInteger idx, BOOL *stop) {
+		return [asset.localIdentifier isEqualToString:localIdentifier];
+	}];
+	if (index == NSNotFound) {
+		return nil;
+	}
+	NSIndexPath *indexPath = [NSIndexPath indexPathForItem:(NSInteger)index inSection:0];
+	IMLocalAssetCell *cell = (IMLocalAssetCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	if (!cell) {
+		[self.collectionView scrollToItemAtIndexPath:indexPath
+		                            atScrollPosition:UICollectionViewScrollPositionCenteredVertically
+		                                    animated:NO];
+		[self.collectionView layoutIfNeeded];
+		cell = (IMLocalAssetCell *)[self.collectionView cellForItemAtIndexPath:indexPath];
+	}
+	return cell.imageView;
 }
 
 @end

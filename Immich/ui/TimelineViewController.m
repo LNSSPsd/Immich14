@@ -5,7 +5,6 @@
 #import "IMAssetApi.h"
 #import "IMSyncStreamApi.h"
 #import "AssetViewController.h"
-#import "LocalAssetPreviewViewController.h"
 #import "IMBulkAssetActions.h"
 #import "IMDatabase.h"
 #import "IMPhotoLibrary.h"
@@ -840,16 +839,23 @@ static const CGFloat kCellSpacing = 2;
 
 	if (!self.selecting) {
 		[collectionView deselectItemAtIndexPath:indexPath animated:YES];
-		if (localItem) {
-			LocalAssetPreviewViewController *preview = [LocalAssetPreviewViewController previewWithAsset:localItem.asset];
-			[self.navigationController pushViewController:preview animated:YES];
+		if (!asset && !localItem) {
 			return;
 		}
-		if (!asset) {
-			return;
+		NSArray<IMAsset *> *serverAssets = self.bucketAssets[bucket] ?: @[];
+		NSMutableArray<IMAsset *> *items = [serverAssets mutableCopy];
+		NSMutableDictionary<NSString *, PHAsset *> *localAssets = [NSMutableDictionary dictionary];
+		for (IMTimelineLocalItem *item in self.localItemsByBucket[bucket]) {
+			IMAsset *standIn = [AssetViewController viewerAssetForLocalAsset:item.asset];
+			[items addObject:standIn];
+			localAssets[standIn.assetId] = item.asset;
 		}
-		AssetViewController *viewer = [AssetViewController viewerWithAssets:self.bucketAssets[bucket]
-		                                                        startIndex:indexPath.item];
+		NSInteger startIndex = localItem
+		    ? (NSInteger)serverAssets.count + (indexPath.item - [self serverCountForBucket:bucket])
+		    : indexPath.item;
+		AssetViewController *viewer = [AssetViewController viewerWithAssets:items
+		                                                        startIndex:startIndex
+		                                                       localAssets:localAssets];
 		viewer.zoomSource = self; 
 		viewer.presentSourceImageView = ((TimelineCell *)[collectionView cellForItemAtIndexPath:indexPath]).imageView;
 		[self presentViewController:viewer animated:YES completion:nil];
@@ -892,6 +898,19 @@ static const CGFloat kCellSpacing = 2;
 #pragma mark - IMZoomTransitionSource
 
 - (nullable NSIndexPath *)indexPathForAssetId:(NSString *)assetId {
+	NSString *localIdentifier = [AssetViewController localIdentifierForViewerAssetId:assetId];
+	if (localIdentifier) {
+		for (NSInteger section = 0; section < (NSInteger)self.bucketDates.count; section++) {
+			NSString *bucket = self.bucketDates[section];
+			NSArray<IMTimelineLocalItem *> *localItems = self.localItemsByBucket[bucket];
+			for (NSInteger index = 0; index < (NSInteger)localItems.count; index++) {
+				if ([localItems[index].asset.localIdentifier isEqualToString:localIdentifier]) {
+					return [NSIndexPath indexPathForItem:[self serverCountForBucket:bucket] + index inSection:section];
+				}
+			}
+		}
+		return nil;
+	}
 	for (NSInteger section = 0; section < (NSInteger)self.bucketDates.count; section++) {
 		NSArray<IMAsset *> *assets = self.bucketAssets[self.bucketDates[section]];
 		for (NSInteger item = 0; item < (NSInteger)assets.count; item++) {

@@ -4,7 +4,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class PHAsset;
+
 @interface AssetViewController : UIViewController
+
++ (IMAsset *)viewerAssetForLocalAsset:(PHAsset *)asset;
++ (nullable NSString *)localIdentifierForViewerAssetId:(NSString *)assetId;
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                      localAssets:(NSDictionary<NSString *, PHAsset *> *)localAssets;
 
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets startIndex:(NSInteger)startIndex;
 + (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets

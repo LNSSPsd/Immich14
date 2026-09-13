@@ -278,6 +278,7 @@ static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixel
 @property (nonatomic, copy, nullable) void (^onOCRAvailabilityKnown)(BOOL hasText);
 @property (nonatomic, strong, readonly, nullable) NSNumber *ocrHasText;
 @property (nonatomic, strong, nullable) UIImage *placeholderImage;
+@property (nonatomic, strong, nullable) PHAsset *localAsset;
 - (instancetype)initWithAsset:(IMAsset *)asset;
 - (void)playIfVideo;
 - (void)pauseIfVideo;
@@ -324,6 +325,11 @@ static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixel
 @property (nonatomic, strong, nullable) PHLivePhotoView *livePhotoView;
 @property (nonatomic, strong, nullable) UIVisualEffectView *liveBadgeView;
 @property (nonatomic) PHLivePhotoRequestID livePhotoRequestId;
+@property (nonatomic) BOOL livePlaybackStarted;
+
+@property (nonatomic) PHImageRequestID localImageRequestId;
+@property (nonatomic) PHImageRequestID localVideoRequestId;
+@property (nonatomic) PHImageRequestID localLiveRequestId;
 @end
 
 static void *IMPlayerLayerReadyForDisplayContext = &IMPlayerLayerReadyForDisplayContext;
@@ -435,6 +441,12 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		[self showImage:self.placeholderImage];
 	}
 
+	if (self.localAsset) {
+		[self startImageLoad];
+		[self requestLocalLivePhotoIfNeeded];
+		return;
+	}
+
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
 
@@ -457,6 +469,10 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 }
 
 - (void)startImageLoad {
+	if (self.localAsset) {
+		[self startLocalImageLoad];
+		return;
+	}
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
 
@@ -660,16 +676,24 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	self.posterView.image = self.placeholderImage;
 	[self.view insertSubview:self.posterView atIndex:0];
 
-	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
-	[[IMThumbCache shared] thumbnailForAssetId:assetId
-	                                        size:IMAssetMediaSizePreview
-	                                  completion:^(UIImage *_Nullable image) {
-		    typeof(self) strongSelf = weakSelf;
-		    if (strongSelf && image && !strongSelf.playerLayer.readyForDisplay) {
-			    strongSelf.posterView.image = image;
-		    }
-	    }];
+	void (^applyPoster)(UIImage *_Nullable) = ^(UIImage *_Nullable image) {
+		typeof(self) strongSelf = weakSelf;
+		if (strongSelf && image && !strongSelf.playerLayer.readyForDisplay) {
+			strongSelf.posterView.image = image;
+		}
+	};
+	if (self.localAsset) {
+		[self requestLocalImageWithMaxPixelSize:MAX(UIScreen.mainScreen.nativeBounds.size.width,
+		                                             UIScreen.mainScreen.nativeBounds.size.height)
+		                             completion:^(UIImage *_Nullable image, BOOL degraded) {
+			                             applyPoster(image);
+		                             }];
+	} else {
+		[[IMThumbCache shared] thumbnailForAssetId:self.asset.assetId
+		                                        size:IMAssetMediaSizePreview
+		                                  completion:applyPoster];
+	}
 
 	[self setUpVideoControls];
 	[self startVideoLoad];
@@ -755,6 +779,10 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 }
 
 - (void)startVideoLoad {
+	if (self.localAsset) {
+		[self startLocalVideoLoad];
+		return;
+	}
 	NSString *assetId = self.asset.assetId;
 	NSString *cachePath = [IMVideoCacheDirectory() stringByAppendingPathComponent:
 	                                                   [NSString stringWithFormat:@"%@.mp4", assetId]];
@@ -781,11 +809,15 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 }
 
 - (void)attachPlayerWithPath:(NSString *)path {
+	[self attachPlayerWithItem:[AVPlayerItem playerItemWithURL:[NSURL fileURLWithPath:path]] filePath:path];
+}
+
+- (void)attachPlayerWithItem:(AVPlayerItem *)item filePath:(nullable NSString *)path {
 	[self.spinner stopAnimating];
 	self.errorLabel.hidden = YES;
 	self.videoFilePath = path;
 
-	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	self.player = [AVPlayer playerWithPlayerItem:item];
 	self.player.muted = YES; 
 
 	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
@@ -1029,6 +1061,98 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	return image;
 }
 
+#pragma mark Local (camera-roll) pages
+
+- (void)requestLocalImageWithMaxPixelSize:(CGFloat)maxPixelSize
+                               completion:(void (^)(UIImage *_Nullable image, BOOL degraded))completion {
+	PHImageRequestOptions *options = [[PHImageRequestOptions alloc] init];
+	options.deliveryMode = PHImageRequestOptionsDeliveryModeOpportunistic;
+	options.resizeMode = PHImageRequestOptionsResizeModeFast;
+	options.networkAccessAllowed = YES;
+	if (self.localImageRequestId != PHInvalidImageRequestID) {
+		[[PHImageManager defaultManager] cancelImageRequest:self.localImageRequestId];
+	}
+	self.localImageRequestId = [[PHImageManager defaultManager]
+	    requestImageForAsset:self.localAsset
+	              targetSize:CGSizeMake(maxPixelSize, maxPixelSize)
+	             contentMode:PHImageContentModeAspectFit
+	                 options:options
+	           resultHandler:^(UIImage *_Nullable image, NSDictionary *_Nullable info) {
+		    BOOL degraded = [info[PHImageResultIsDegradedKey] boolValue];
+		    dispatch_async(dispatch_get_main_queue(), ^{
+			    completion(image, degraded);
+		    });
+	    }];
+}
+
+- (void)startLocalImageLoad {
+	__weak typeof(self) weakSelf = self;
+	[self requestLocalImageWithMaxPixelSize:IMViewerMaxPixelSize()
+	                             completion:^(UIImage *_Nullable image, BOOL degraded) {
+		                             typeof(self) strongSelf = weakSelf;
+		                             if (!strongSelf) {
+			                             return;
+		                             }
+		                             if (image) {
+			                             [strongSelf showImage:image];
+		                             } else if (!degraded) {
+			                             [strongSelf showLoadError];
+		                             }
+	                             }];
+}
+
+- (void)startLocalVideoLoad {
+	PHVideoRequestOptions *options = [[PHVideoRequestOptions alloc] init];
+	options.deliveryMode = PHVideoRequestOptionsDeliveryModeAutomatic;
+	options.networkAccessAllowed = YES;
+	__weak typeof(self) weakSelf = self;
+	self.localVideoRequestId = [[PHImageManager defaultManager]
+	    requestPlayerItemForVideo:self.localAsset
+	                      options:options
+	                resultHandler:^(AVPlayerItem *_Nullable item, NSDictionary *_Nullable info) {
+		    BOOL cancelled = [info[PHImageCancelledKey] boolValue];
+		    dispatch_async(dispatch_get_main_queue(), ^{
+			    typeof(self) strongSelf = weakSelf;
+			    if (!strongSelf) {
+				    return;
+			    }
+			    strongSelf.localVideoRequestId = PHInvalidImageRequestID;
+			    if (!item) {
+				    if (!cancelled) [strongSelf showLoadError];
+				    return;
+			    }
+			    NSString *path = [item.asset isKindOfClass:[AVURLAsset class]] ? ((AVURLAsset *)item.asset).URL.path : nil;
+			    [strongSelf attachPlayerWithItem:item filePath:path];
+		    });
+	    }];
+}
+
+- (void)requestLocalLivePhotoIfNeeded {
+	if (!(self.localAsset.mediaSubtypes & PHAssetMediaSubtypePhotoLive)) {
+		return;
+	}
+	PHLivePhotoRequestOptions *options = [[PHLivePhotoRequestOptions alloc] init];
+	options.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+	options.networkAccessAllowed = YES;
+	__weak typeof(self) weakSelf = self;
+	self.localLiveRequestId = [[PHImageManager defaultManager]
+	    requestLivePhotoForAsset:self.localAsset
+	                  targetSize:PHImageManagerMaximumSize
+	                 contentMode:PHImageContentModeAspectFit
+	                     options:options
+	               resultHandler:^(PHLivePhoto *_Nullable livePhoto, NSDictionary *_Nullable info) {
+		    BOOL degraded = [info[PHImageResultIsDegradedKey] boolValue];
+		    dispatch_async(dispatch_get_main_queue(), ^{
+			    typeof(self) strongSelf = weakSelf;
+			    if (!strongSelf || !livePhoto || degraded) {
+				    return;
+			    }
+			    strongSelf.livePhoto = livePhoto;
+			    [strongSelf showLiveBadge];
+		    });
+	    }];
+}
+
 #pragma mark Live Photo
 
 - (void)stageLivePairImageData:(NSData *)data {
@@ -1064,16 +1188,17 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	}
 	NSString *liveVideoId = self.asset.livePhotoVideoId;
 	NSString *path = [IMLivePairDirectory() stringByAppendingPathComponent:
-	                                            [liveVideoId stringByAppendingPathExtension:@"mov"]];
+	                                            [NSString stringWithFormat:@"%@-original.mov", liveVideoId]];
 	if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
 		self.livePairVideoPath = path;
 		[self requestLivePhotoIfPaired];
 		return;
 	}
 	__weak typeof(self) weakSelf = self;
-	self.liveVideoTask = [IMAssetApi videoPlaybackFileForAssetId:liveVideoId
-	                                             destinationURL:[NSURL fileURLWithPath:path]
-	                                                 completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
+	self.liveVideoTask = [IMAssetApi originalFileForAssetId:liveVideoId
+	                                                  edited:NO
+	                                         destinationURL:[NSURL fileURLWithPath:path]
+	                                             completion:^(NSURL *_Nullable fileURL, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
 		    if (!strongSelf || !fileURL) {
 			    return;
@@ -1100,7 +1225,10 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	                                          contentMode:PHImageContentModeAspectFit
 	                                        resultHandler:^(PHLivePhoto *_Nullable livePhoto, NSDictionary *_Nullable info) {
 		    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf || !livePhoto) {
+		    if (!strongSelf || !livePhoto || [info[PHLivePhotoInfoIsDegradedKey] boolValue]) {
+			    if (!livePhoto && info[PHLivePhotoInfoErrorKey]) {
+				    NSLog(@"AssetViewController: Live Photo pairing failed: %@", info[PHLivePhotoInfoErrorKey]);
+			    }
 			    return;
 		    }
 		    strongSelf.livePhoto = livePhoto;
@@ -1162,19 +1290,33 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 			self.livePhotoView = [[PHLivePhotoView alloc] init];
 			self.livePhotoView.delegate = self;
 			self.livePhotoView.contentMode = UIViewContentModeScaleAspectFit;
+			self.livePhotoView.backgroundColor = UIColor.clearColor;
 			self.livePhotoView.userInteractionEnabled = NO;
 		}
+		if (self.scrollView.zoomScale > self.scrollView.minimumZoomScale + 0.01) {
+			[self.scrollView setZoomScale:self.scrollView.minimumZoomScale animated:NO];
+		}
+		self.livePlaybackStarted = NO;
 		self.livePhotoView.livePhoto = self.livePhoto;
-		self.livePhotoView.frame = self.imageView.bounds; 
-		[self.imageView addSubview:self.livePhotoView];
+		self.livePhotoView.frame = [self.imageView convertRect:self.imageView.bounds toView:self.view];
+		[self.view insertSubview:self.livePhotoView aboveSubview:self.scrollView];
 		[self.livePhotoView startPlaybackWithStyle:PHLivePhotoViewPlaybackStyleFull];
 	} else if (press.state == UIGestureRecognizerStateEnded || press.state == UIGestureRecognizerStateCancelled ||
 	           press.state == UIGestureRecognizerStateFailed) {
+		if (!self.livePlaybackStarted) {
+			[self.livePhotoView removeFromSuperview];
+			return;
+		}
 		[self.livePhotoView stopPlayback];
 	}
 }
 
+- (void)livePhotoView:(PHLivePhotoView *)livePhotoView willBeginPlaybackWithStyle:(PHLivePhotoViewPlaybackStyle)playbackStyle {
+	self.livePlaybackStarted = YES;
+}
+
 - (void)livePhotoView:(PHLivePhotoView *)livePhotoView didEndPlaybackWithStyle:(PHLivePhotoViewPlaybackStyle)playbackStyle {
+	self.livePlaybackStarted = NO;
 	[livePhotoView removeFromSuperview];
 }
 
@@ -1190,6 +1332,11 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	if (_livePhotoRequestId != PHLivePhotoRequestIDInvalid) {
 		[PHLivePhoto cancelLivePhotoRequestWithRequestID:_livePhotoRequestId];
+	}
+	for (NSNumber *requestId in @[ @(_localImageRequestId), @(_localVideoRequestId), @(_localLiveRequestId) ]) {
+		if (requestId.intValue != PHInvalidImageRequestID) {
+			[[PHImageManager defaultManager] cancelImageRequest:requestId.intValue];
+		}
 	}
 }
 
@@ -1222,6 +1369,9 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic) NSInteger currentIndex;
 @property (nonatomic) BOOL readOnly;
 @property (nonatomic) BOOL ownerAware;
+@property (nonatomic, copy) NSDictionary<NSString *, PHAsset *> *localAssets;
+@property (nonatomic, strong) UIButton *infoButton;
+@property (nonatomic, strong) UILabel *localBadgeLabel;
 @property (nonatomic, strong) UIPageViewController *pageViewController;
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
@@ -1273,15 +1423,61 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	return vc;
 }
 
+static NSString *const kLocalViewerAssetIdPrefix = @"local:";
+
++ (IMAsset *)viewerAssetForLocalAsset:(PHAsset *)asset {
+	NSString *created = @"";
+	if (asset.creationDate) {
+		NSISO8601DateFormatter *formatter = [[NSISO8601DateFormatter alloc] init];
+		created = [formatter stringFromDate:asset.creationDate];
+	}
+	double ratio = asset.pixelHeight > 0 ? (double)asset.pixelWidth / (double)asset.pixelHeight : 0;
+	return [IMAsset assetWithId:[kLocalViewerAssetIdPrefix stringByAppendingString:asset.localIdentifier ?: @""]
+	              fileCreatedAt:created
+	                   favorite:NO
+	                      image:asset.mediaType != PHAssetMediaTypeVideo
+	                 durationMs:(NSInteger)(asset.duration * 1000.0)
+	                      ratio:ratio
+	                       city:nil
+	                    country:nil
+	           livePhotoVideoId:nil];
+}
+
++ (nullable NSString *)localIdentifierForViewerAssetId:(NSString *)assetId {
+	if (![assetId hasPrefix:kLocalViewerAssetIdPrefix]) {
+		return nil;
+	}
+	NSString *identifier = [assetId substringFromIndex:kLocalViewerAssetIdPrefix.length];
+	return identifier.length > 0 ? identifier : nil;
+}
+
++ (instancetype)viewerWithAssets:(NSArray<IMAsset *> *)assets
+                       startIndex:(NSInteger)startIndex
+                      localAssets:(NSDictionary<NSString *, PHAsset *> *)localAssets {
+	AssetViewController *vc = [self viewerWithAssets:assets startIndex:startIndex];
+	vc.localAssets = localAssets;
+	return vc;
+}
+
 #pragma mark Zoom transition plumbing
 
 - (IMAsset *)currentAsset {
 	return self.assets[self.currentIndex];
 }
 
+- (nullable PHAsset *)currentLocalAsset {
+	if (self.assets.count == 0 || self.currentIndex < 0 || self.currentIndex >= (NSInteger)self.assets.count) {
+		return nil;
+	}
+	return self.localAssets[self.assets[self.currentIndex].assetId];
+}
+
 - (BOOL)currentAssetAllowsMutations {
 	if (self.readOnly || self.assets.count == 0 || self.currentIndex < 0 || self.currentIndex >= (NSInteger)self.assets.count) {
 		return NO;
+	}
+	if ([self currentLocalAsset]) {
+		return NO; 
 	}
 	if (!self.ownerAware) {
 		return YES;
@@ -1411,6 +1607,19 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	UIButton *infoButton = [self chromeButtonWithSymbol:@"info.circle"];
 	[infoButton addTarget:self action:@selector(infoTapped) forControlEvents:UIControlEventTouchUpInside];
 	[self.bottomBar.contentView addSubview:infoButton];
+	self.infoButton = infoButton;
+
+	self.localBadgeLabel = [[UILabel alloc] init];
+	self.localBadgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
+	self.localBadgeLabel.text = _(@"Not uploaded yet");
+	self.localBadgeLabel.textColor = [UIColor.whiteColor colorWithAlphaComponent:0.8];
+	self.localBadgeLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+	self.localBadgeLabel.hidden = YES;
+	[self.topBar.contentView addSubview:self.localBadgeLabel];
+	[NSLayoutConstraint activateConstraints:@[
+		[self.localBadgeLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+		[self.localBadgeLabel.centerYAnchor constraintEqualToAnchor:closeButton.centerYAnchor],
+	]];
 
 	self.ocrButton = [self chromeButtonWithSymbol:@"doc.text.viewfinder"];
 	[self.ocrButton addTarget:self action:@selector(ocrTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -1453,8 +1662,16 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		[self.ocrButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
 	]];
 
+	[self updateActionButtons];
+}
+
+- (void)updateActionButtons {
 	[self updateFavoriteButton];
 	[self updateEditButton];
+	BOOL local = [self currentLocalAsset] != nil;
+	self.addToAlbumButton.hidden = ![self currentAssetAllowsMutations];
+	self.infoButton.hidden = local;
+	self.localBadgeLabel.hidden = !local;
 }
 
 - (UIVisualEffectView *)blurBar {
@@ -1533,13 +1750,13 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 		AssetPageContentViewController *current = (AssetPageContentViewController *)strongSelf.pageViewController.viewControllers.firstObject;
 		strongSelf.currentIndex = [strongSelf indexOfPage:current];
 		[current playIfVideo];
-		[strongSelf updateFavoriteButton];
-		[strongSelf updateEditButton];
+		[strongSelf updateActionButtons];
 		strongSelf.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	}];
 }
 
 - (void)infoTapped {
+	if ([self currentLocalAsset]) return;
 	IMAsset *asset = self.assets[self.currentIndex];
 	AssetDetailViewController *detail = [AssetDetailViewController detailViewControllerForAssetId:asset.assetId];
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:detail];
@@ -1632,7 +1849,62 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	    }];
 }
 
+- (void)shareLocalAsset:(PHAsset *)asset {
+	NSArray<PHAssetResource *> *resources = [PHAssetResource assetResourcesForAsset:asset];
+	PHAssetResourceType wanted = asset.mediaType == PHAssetMediaTypeVideo ? PHAssetResourceTypeVideo : PHAssetResourceTypePhoto;
+	PHAssetResource *resource = nil;
+	for (PHAssetResource *candidate in resources) {
+		if (candidate.type == wanted) {
+			resource = candidate;
+			break;
+		}
+	}
+	resource = resource ?: resources.firstObject;
+	if (!resource) {
+		[self presentShareFailureWithMessage:_(@"This photo has no file to share.")];
+		return;
+	}
+	NSString *filename = resource.originalFilename.lastPathComponent;
+	if (filename.length == 0 || [filename isEqualToString:@"."] || [filename isEqualToString:@".."]) {
+		filename = asset.mediaType == PHAssetMediaTypeVideo ? @"video.mov" : @"photo.jpg";
+	}
+	NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMShare"];
+	[[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:NULL];
+	NSURL *fileURL = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:filename]];
+	[[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
+	PHAssetResourceRequestOptions *options = [[PHAssetResourceRequestOptions alloc] init];
+	options.networkAccessAllowed = YES;
+	self.shareButton.enabled = NO;
+	__weak typeof(self) weakSelf = self;
+	[[PHAssetResourceManager defaultManager] writeDataForAssetResource:resource
+	                                                            toFile:fileURL
+	                                                           options:options
+	                                                 completionHandler:^(NSError *_Nullable error) {
+		dispatch_async(dispatch_get_main_queue(), ^{
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf) return;
+			strongSelf.shareButton.enabled = YES;
+			if (error) {
+				[strongSelf presentShareFailureWithMessage:error.localizedDescription ?: _(@"The photo could not be read.")];
+				return;
+			}
+			UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[ fileURL ]
+			                                                                    applicationActivities:nil];
+			activity.popoverPresentationController.sourceView = strongSelf.shareButton;
+			activity.completionWithItemsHandler = ^(UIActivityType activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+				[[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
+			};
+			[strongSelf presentViewController:activity animated:YES completion:nil];
+		});
+	}];
+}
+
 - (void)shareTapped {
+	PHAsset *localAsset = [self currentLocalAsset];
+	if (localAsset) {
+		[self shareLocalAsset:localAsset]; 
+		return;
+	}
 	IMAsset *asset = self.assets[self.currentIndex];
 	UIAlertController *sheet = [UIAlertController alertControllerWithTitle:_(@"Share")
 	                                                                 message:nil
@@ -1773,6 +2045,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 
 - (AssetPageContentViewController *)pageForIndex:(NSInteger)index {
 	AssetPageContentViewController *page = [[AssetPageContentViewController alloc] initWithAsset:self.assets[index]];
+	page.localAsset = self.localAssets[self.assets[index].assetId];
 	__weak typeof(self) weakSelf = self;
 	__weak AssetPageContentViewController *weakPage = page;
 	page.onOCRAvailabilityKnown = ^(BOOL hasText) {
@@ -1823,8 +2096,7 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
 	self.currentIndex = [self indexOfPage:current];
 	[current playIfVideo];
-	[self updateFavoriteButton];
-	[self updateEditButton];
+	[self updateActionButtons];
 
 	self.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	if (self.ocrOn) {
