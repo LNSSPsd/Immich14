@@ -136,6 +136,34 @@ static pid_t IMReadDaemonPID(void) {
 	return bytes == sizeof(pid) && pid > 0 ? pid : 0;
 }
 
+static NSString *IMBackupHelperBuildIdentifier(void) {
+	return [NSString stringWithFormat:@"%s (%s)", APP_VERSION_STRING, APP_COMMIT_HASH];
+}
+
+static NSString *_Nullable IMReadDaemonBuildIdentifier(void) {
+	NSString *path = IMDaemonRunFilePath();
+	if (path.length == 0) {
+		return nil;
+	}
+	int fd = open(path.fileSystemRepresentation, O_RDONLY);
+	if (fd < 0) {
+		return nil;
+	}
+	if (lseek(fd, sizeof(pid_t), SEEK_SET) < 0) {
+		close(fd);
+		return nil;
+	}
+	char buffer[256];
+	ssize_t bytes = read(fd, buffer, sizeof(buffer) - 1);
+	close(fd);
+	if (bytes <= 0) {
+		return nil;
+	}
+	buffer[bytes] = '\0';
+	NSString *identifier = [NSString stringWithUTF8String:buffer];
+	return identifier.length > 0 ? identifier : nil;
+}
+
 static BOOL IMDaemonMarkerIsLocked(void) {
 	NSString *path = IMDaemonRunFilePath();
 	if (path.length == 0) {
@@ -195,7 +223,9 @@ static BOOL IMWriteDaemonPIDFile(void) {
 		return NO;
 	}
 	pid_t pid = getpid();
-	if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) < 0 || write(fd, &pid, sizeof(pid)) != sizeof(pid)) {
+	NSData *identifierData = [IMBackupHelperBuildIdentifier() dataUsingEncoding:NSUTF8StringEncoding];
+	if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) < 0 || write(fd, &pid, sizeof(pid)) != sizeof(pid) ||
+	    (identifierData.length > 0 && write(fd, identifierData.bytes, identifierData.length) != (ssize_t)identifierData.length)) {
 		int writeError = errno;
 		(void)flock(fd, LOCK_UN);
 		close(fd);
@@ -803,6 +833,15 @@ static void IMDaemonArmTimer(dispatch_source_t timer, NSTimeInterval interval) {
 	}
 	pid_t knownPID = IMReadDaemonPID();
 	if (IMDaemonMarkerIsLocked()) {
+		NSString *runningIdentifier = IMReadDaemonBuildIdentifier();
+		if (![runningIdentifier isEqualToString:IMBackupHelperBuildIdentifier()]) {
+			if (knownPID > 0 && knownPID != getpid()) {
+				NSLog(@"IMBackupDaemon: killing stale helper (PID %d, build %@) after reinstall",
+				      knownPID, runningIdentifier ?: @"unknown");
+				(void)kill(knownPID, SIGTERM);
+			}
+			return;
+		}
 		if (knownPID > 0 && knownPID != getpid()) {
 			gSpawnedDaemonPID = knownPID;
 		}
