@@ -79,6 +79,7 @@ static void IMClearAccountScopedState(void) {
 @property (nonatomic, copy, nullable) NSString *userId;
 @property (nonatomic) IMSessionAuthKind authKind;
 @property (nonatomic) BOOL passwordChangeRequired;
+@property (nonatomic) NSInteger lastKeychainStatus;
 @end
 
 @implementation IMSession
@@ -143,6 +144,10 @@ static void IMClearAccountScopedState(void) {
 #endif
 	NSString *token = [self keychainToken];
 	NSURL *url = urlString.length > 0 ? [NSURL URLWithString:urlString] : nil;
+	if (url && token.length == 0 && self.accessToken.length > 0 && self.lastKeychainStatus != errSecItemNotFound) {
+		NSLog(@"IMSession: Keychain read failed (%ld); keeping the current session", (long)self.lastKeychainStatus);
+		token = self.accessToken;
+	}
 	if (url && token.length > 0) {
 		self.baseURL = url;
 		self.accessToken = token;
@@ -183,13 +188,6 @@ static void IMClearAccountScopedState(void) {
 		[defaults removeObjectForKey:kDefaultsAuthKind];
 	}
 	[defaults setBool:passwordChangeRequired forKey:kDefaultsPasswordChangeRequired];
-#if IM_TROLLSTORE
-	NSMutableDictionary *shared = [NSMutableDictionary dictionary];
-	shared[kDefaultsBaseURL] = baseURL.absoluteString;
-	if (userId) shared[kDefaultsUserId] = userId;
-	if (kind == IMSessionAuthKindAPIKey) shared[kDefaultsAuthKind] = kAuthKindAPIKeyValue;
-	[shared writeToFile:IMSessionSharedStateFilePath() atomically:YES];
-#endif
 
 	[self setKeychainToken:secret];
 
@@ -198,6 +196,9 @@ static void IMClearAccountScopedState(void) {
 	self.userId = userId;
 	self.authKind = kind;
 	self.passwordChangeRequired = passwordChangeRequired;
+#if IM_TROLLSTORE
+	[self publishSharedState];
+#endif
 	if (accountChanged) {
 		IMClearAccountScopedState();
 	}
@@ -231,6 +232,20 @@ static void IMClearAccountScopedState(void) {
 	                 kind:IMSessionAuthKindAPIKey
 	 passwordChangeRequired:NO];
 }
+
+#if IM_TROLLSTORE
+- (void)publishSharedState {
+	if (!self.isLoggedIn) {
+		(void)[[NSFileManager defaultManager] removeItemAtPath:IMSessionSharedStateFilePath() error:NULL];
+		return;
+	}
+	NSMutableDictionary *shared = [NSMutableDictionary dictionary];
+	shared[kDefaultsBaseURL] = self.baseURL.absoluteString;
+	if (self.userId) shared[kDefaultsUserId] = self.userId;
+	if (self.authKind == IMSessionAuthKindAPIKey) shared[kDefaultsAuthKind] = kAuthKindAPIKeyValue;
+	[shared writeToFile:IMSessionSharedStateFilePath() atomically:YES];
+}
+#endif
 
 - (void)clearPasswordChangeRequirement {
 	self.passwordChangeRequired = NO;
@@ -290,6 +305,7 @@ static void IMClearAccountScopedState(void) {
 
 	CFTypeRef result = NULL;
 	OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+	self.lastKeychainStatus = status;
 	if (status != errSecSuccess || result == NULL) {
 		return nil;
 	}

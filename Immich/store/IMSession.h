@@ -19,6 +19,11 @@ typedef NS_ENUM(NSInteger, IMSessionAuthKind) {
 @property (nonatomic, readonly) BOOL passwordChangeRequired;
 
 - (void)reloadFromPersistence;
+@property (nonatomic, readonly) NSInteger lastKeychainStatus;
+
+#if IM_TROLLSTORE
+- (void)publishSharedState;
+#endif
 
 - (void)startWithBaseURL:(NSURL *)baseURL
              accessToken:(NSString *)token

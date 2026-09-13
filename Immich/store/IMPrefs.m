@@ -156,6 +156,14 @@ static NSString *IMPrefsSharedStateFilePath(void) {
 	});
 }
 
+#if IM_TROLLSTORE
+- (void)publishSharedState {
+	dispatch_sync(self.queue, ^{
+		[self.backing writeToFile:IMPrefsSharedStateFilePath() atomically:YES];
+	});
+}
+#endif
+
 #pragma mark - Typed settings
 
 - (BOOL)wifiOnlyUpload {

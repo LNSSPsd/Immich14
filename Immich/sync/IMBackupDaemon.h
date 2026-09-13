@@ -30,6 +30,8 @@ extern NSString *const IMBackupTaskIdentifier;
 #if IM_TROLLSTORE
 - (void)startPrivilegedDaemonIfNeeded;
 - (void)stopPrivilegedDaemon;
+- (NSString *)helperStatusDescription;
+- (NSString *)helperLogText;
 #endif
 
 @end
@@ -37,5 +39,9 @@ extern NSString *const IMBackupTaskIdentifier;
 int IMBackupDaemonMain(void);
 
 BOOL IMBackupDaemonIsDaemonProcess(void);
+
+#if IM_TROLLSTORE
+void IMBackupHelperLogEvent(NSString *message);
+#endif
 
 NS_ASSUME_NONNULL_END

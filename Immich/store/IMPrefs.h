@@ -23,6 +23,10 @@ extern NSNotificationName const IMPrefsBackupEnabledDidChangeNotification;
 
 - (void)reloadFromPersistence;
 
+#if IM_TROLLSTORE
+- (void)publishSharedState;
+#endif
+
 @property (nonatomic) BOOL wifiOnlyUpload; 
 @property (nonatomic, copy) NSString *thumbnailQuality; 
 @property (nonatomic) BOOL allowInsecureTLS; 

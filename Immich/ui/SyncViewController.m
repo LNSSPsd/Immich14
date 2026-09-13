@@ -32,6 +32,9 @@ typedef NS_ENUM(NSInteger, IMSyncLibraryRow) {
 typedef NS_ENUM(NSInteger, IMSyncStatusRow) {
 	IMSyncStatusRowSynced = 0,
 	IMSyncStatusRowPendingUpload,
+#if IM_TROLLSTORE
+	IMSyncStatusRowHelper,
+#endif
 	IMSyncStatusRowCount,
 };
 
@@ -159,6 +162,30 @@ static NSString *const kActionCellId = @"action";
 	[self.navigationController pushViewController:vc animated:YES];
 }
 
+#if IM_TROLLSTORE
+- (void)showHelperLog {
+	UITextView *textView = [[UITextView alloc] init];
+	textView.editable = NO;
+	textView.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+	textView.text = [IMBackupDaemon.shared helperLogText];
+	UIViewController *controller = [[UIViewController alloc] init];
+	controller.title = _(@"Helper Log");
+	controller.view = textView;
+	controller.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Copy")
+	                                                                                style:UIBarButtonItemStylePlain
+	                                                                               target:self
+	                                                                               action:@selector(copyHelperLog)];
+	[self.navigationController pushViewController:controller animated:YES];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[textView scrollRangeToVisible:NSMakeRange(textView.text.length, 0)];
+	});
+}
+
+- (void)copyHelperLog {
+	[UIPasteboard generalPasteboard].string = [IMBackupDaemon.shared helperLogText];
+}
+#endif
+
 - (void)checkNowTapped {
 	if (IMForegroundSync.shared.isRunning) {
 		[IMForegroundSync.shared cancel];
@@ -252,6 +279,19 @@ static NSString *const kActionCellId = @"action";
 			switch (indexPath.row) {
 				case IMSyncStatusRowSynced:
 					return [self valueCellWithTitle:_(@"Already on Server") detail:[@(self.syncedCount) stringValue]];
+#if IM_TROLLSTORE
+				case IMSyncStatusRowHelper: {
+					UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:kValueCellId];
+					cell.textLabel.text = _(@"Background Helper");
+					cell.detailTextLabel.text = [IMBackupDaemon.shared helperStatusDescription];
+					cell.detailTextLabel.numberOfLines = 0;
+					if (@available(iOS 13.0, *)) {
+						cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+					}
+					cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+					return cell;
+				}
+#endif
 				default: {
 					UITableViewCell *cell = [self valueCellWithTitle:_(@"Not on Server") detail:[@(self.pendingUploadCount) stringValue]];
 					if (self.pendingUploadCount > 0) {
@@ -294,6 +334,12 @@ static NSString *const kActionCellId = @"action";
 		[self showPendingUploads];
 		return;
 	}
+#if IM_TROLLSTORE
+	if (indexPath.section == IMSyncSectionStatus && indexPath.row == IMSyncStatusRowHelper) {
+		[self showHelperLog];
+		return;
+	}
+#endif
 	if (indexPath.section == IMSyncSectionActions) {
 		[self checkNowTapped];
 	}

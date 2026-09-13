@@ -154,6 +154,9 @@ static NSError *IMSyncSessionChangedError(void) {
 }
 
 - (void)photoLibraryDidChange:(PHChange *)changeInstance {
+#if IM_TROLLSTORE
+	if (IMBackupDaemonIsDaemonProcess()) IMBackupHelperLogEvent(@"photo library changed");
+#endif
 	dispatch_async(dispatch_get_main_queue(), ^{
 		[self triggerAutoCheckIfEnabled];
 	});
