@@ -10,6 +10,20 @@ typedef void (^IMJSONHandler)(id _Nullable json, NSError *_Nullable error);
 typedef void (^IMDataHandler)(NSData *_Nullable data, NSError *_Nullable error);
 typedef void (^IMFileHandler)(NSURL *_Nullable fileURL, NSError *_Nullable error);
 
+@interface IMMultipartBodyFile : NSObject
++ (nullable instancetype)bodyWithFields:(NSDictionary<NSString *, NSString *> *)fields
+                              fileField:(NSString *)fileField
+                               filename:(NSString *)filename
+                                  error:(NSError **)error;
++ (void)removeStaleFiles;
+@property (nonatomic, copy, readonly) NSURL *fileURL;
+@property (nonatomic, copy, readonly) NSString *boundary;
+@property (nonatomic, readonly) BOOL finished;
+- (void)appendFileData:(NSData *)data;
+- (BOOL)finishWithError:(NSError **)error;
+- (void)discard;
+@end
+
 @interface IMApiClient : NSObject
 
 + (instancetype)shared;
@@ -81,6 +95,10 @@ typedef void (^IMFileHandler)(NSURL *_Nullable fileURL, NSError *_Nullable error
                            filename:(NSString *)filename
                            fileData:(NSData *)fileData
                          completion:(IMJSONHandler)completion;
+
+- (nullable NSURLSessionTask *)uploadMultipartBody:(IMMultipartBodyFile *)body
+                                              path:(NSString *)path
+                                        completion:(IMJSONHandler)completion;
 
 @end
 

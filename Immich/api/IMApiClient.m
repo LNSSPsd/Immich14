@@ -590,6 +590,28 @@ static NSString *IMMultipartQuote(NSString *value) {
 	return escaped;
 }
 
+static NSData *IMMultipartHead(NSString *boundary, NSDictionary<NSString *, NSString *> *fields,
+                               NSString *fileField, NSString *filename) {
+	NSMutableData *head = [NSMutableData data];
+	NSData *dashBoundary = [[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding];
+	[fields enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
+		[head appendData:dashBoundary];
+		[head appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", IMMultipartQuote(key)]
+		              dataUsingEncoding:NSUTF8StringEncoding]];
+		[head appendData:[value dataUsingEncoding:NSUTF8StringEncoding]];
+		[head appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+	}];
+	[head appendData:dashBoundary];
+	[head appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"; filename=\"%@\"\r\n",
+	                                              IMMultipartQuote(fileField), IMMultipartQuote(filename)] dataUsingEncoding:NSUTF8StringEncoding]];
+	[head appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+	return head;
+}
+
+static NSData *IMMultipartTail(NSString *boundary) {
+	return [[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding];
+}
+
 - (NSURLSessionTask *)multipartPOST:(NSString *)path
                              fields:(NSDictionary<NSString *, NSString *> *)fields
                           fileField:(NSString *)fileField
@@ -630,28 +652,39 @@ static NSString *IMMultipartQuote(NSString *value) {
 	[request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary]
 	    forHTTPHeaderField:@"Content-Type"];
 
-	NSMutableData *body = [NSMutableData data];
-	NSData *dashBoundary = [[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding];
-
-	[fields enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
-		[body appendData:dashBoundary];
-		[body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", IMMultipartQuote(key)]
-		              dataUsingEncoding:NSUTF8StringEncoding]];
-		[body appendData:[value dataUsingEncoding:NSUTF8StringEncoding]];
-		[body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-	}];
-
-	[body appendData:dashBoundary];
-	[body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"; filename=\"%@\"\r\n",
-	                                              IMMultipartQuote(fileField), IMMultipartQuote(filename)] dataUsingEncoding:NSUTF8StringEncoding]];
-	[body appendData:[@"Content-Type: application/octet-stream\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+	NSMutableData *body = [IMMultipartHead(boundary, fields, fileField, filename) mutableCopy];
 	[body appendData:fileData];
-	[body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-	[body appendData:[[NSString stringWithFormat:@"--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+	[body appendData:IMMultipartTail(boundary)];
 
 	NSURLSessionUploadTask *task = [session uploadTaskWithRequest:request
 	                                                                fromData:body
 	                                                        completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response, NSError *_Nullable error) {
+		    [self handleData:data response:response error:error completion:completion];
+	    }];
+	[task resume];
+	return task;
+}
+
+- (nullable NSURLSessionTask *)uploadMultipartBody:(IMMultipartBodyFile *)body
+                                              path:(NSString *)path
+                                        completion:(IMJSONHandler)completion {
+	NSURL *fileURL = body.fileURL;
+	NSURL *url = [self URLForPath:path queryItems:nil];
+	NSURLSession *session = self.urlSession;
+	if (!body.finished || !url || !session) {
+		[body discard];
+		[self failJSON:completion withError:!url ? [self invalidURLError] : [NSError errorWithDomain:IMApiErrorDomain
+		                                                                                       code:IMApiErrorInvalidURL
+		                                                                                   userInfo:@{NSLocalizedDescriptionKey: _(@"The upload could not be prepared.")}]];
+		return nil;
+	}
+	NSMutableURLRequest *request = [self requestWithURL:url method:@"POST" body:nil];
+	[request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", body.boundary]
+	    forHTTPHeaderField:@"Content-Type"];
+	NSURLSessionUploadTask *task = [session uploadTaskWithRequest:request
+	                                                     fromFile:fileURL
+	                                            completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response, NSError *_Nullable error) {
+		    [[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
 		    [self handleData:data response:response error:error completion:completion];
 	    }];
 	[task resume];
@@ -670,6 +703,97 @@ static NSString *IMMultipartQuote(NSString *value) {
 	}
 	NSURLCredential *credential = [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust];
 	completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+}
+
+@end
+
+#pragma mark - IMMultipartBodyFile
+
+static NSString *IMMultipartBodyDirectory(void) {
+	return [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMUpload"];
+}
+
+@interface IMMultipartBodyFile ()
+@property (nonatomic, copy) NSURL *fileURL;
+@property (nonatomic, copy) NSString *boundary;
+@property (nonatomic, strong, nullable) NSFileHandle *handle;
+@property (nonatomic, strong, nullable) NSError *writeError;
+@property (nonatomic) BOOL finished;
+@end
+
+@implementation IMMultipartBodyFile
+
++ (nullable instancetype)bodyWithFields:(NSDictionary<NSString *, NSString *> *)fields
+                              fileField:(NSString *)fileField
+                               filename:(NSString *)filename
+                                  error:(NSError **)error {
+	NSFileManager *manager = [NSFileManager defaultManager];
+	if (![manager createDirectoryAtPath:IMMultipartBodyDirectory() withIntermediateDirectories:YES attributes:nil error:error]) {
+		return nil;
+	}
+	IMMultipartBodyFile *body = [[self alloc] init];
+	body.boundary = [NSString stringWithFormat:@"IMBoundary-%@", [NSUUID UUID].UUIDString];
+	NSString *name = [[NSUUID UUID].UUIDString stringByAppendingPathExtension:@"multipart"];
+	body.fileURL = [NSURL fileURLWithPath:[IMMultipartBodyDirectory() stringByAppendingPathComponent:name]];
+	if (![manager createFileAtPath:body.fileURL.path contents:IMMultipartHead(body.boundary, fields, fileField, filename) attributes:nil]) {
+		if (error) {
+			*error = [NSError errorWithDomain:IMApiErrorDomain
+			                             code:IMApiErrorInvalidURL
+			                         userInfo:@{NSLocalizedDescriptionKey: _(@"The upload file could not be created.")}];
+		}
+		return nil;
+	}
+	body.handle = [NSFileHandle fileHandleForWritingToURL:body.fileURL error:error];
+	if (!body.handle || ![body.handle seekToEndReturningOffset:NULL error:error]) {
+		[body discard];
+		return nil;
+	}
+	return body;
+}
+
++ (void)removeStaleFiles {
+	NSFileManager *manager = [NSFileManager defaultManager];
+	NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-6 * 60 * 60];
+	for (NSString *name in [manager contentsOfDirectoryAtPath:IMMultipartBodyDirectory() error:NULL]) {
+		NSString *path = [IMMultipartBodyDirectory() stringByAppendingPathComponent:name];
+		NSDate *modified = [manager attributesOfItemAtPath:path error:NULL][NSFileModificationDate];
+		if (modified && [modified compare:cutoff] == NSOrderedAscending) {
+			[manager removeItemAtPath:path error:NULL];
+		}
+	}
+}
+
+- (void)appendFileData:(NSData *)data {
+	if (self.writeError || !self.handle || data.length == 0) {
+		return;
+	}
+	NSError *error = nil;
+	if (![self.handle writeData:data error:&error]) {
+		self.writeError = error ?: [NSError errorWithDomain:IMApiErrorDomain
+		                                               code:IMApiErrorInvalidURL
+		                                           userInfo:@{NSLocalizedDescriptionKey: _(@"The upload file could not be written.")}];
+	}
+}
+
+- (BOOL)finishWithError:(NSError **)error {
+	if (!self.writeError && self.handle) {
+		[self appendFileData:IMMultipartTail(self.boundary)];
+	}
+	NSError *closeError = nil;
+	BOOL closed = !self.handle || [self.handle closeAndReturnError:&closeError];
+	self.handle = nil;
+	if (self.writeError || !closed) {
+		if (error) *error = self.writeError ?: closeError;
+		return NO;
+	}
+	self.finished = YES;
+	return YES;
+}
+
+- (void)discard {
+	[self.handle closeAndReturnError:NULL];
+	self.handle = nil;
+	[[NSFileManager defaultManager] removeItemAtURL:self.fileURL error:NULL];
 }
 
 @end

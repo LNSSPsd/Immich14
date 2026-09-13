@@ -24,15 +24,13 @@ NS_ASSUME_NONNULL_BEGIN
                                       NSString *_Nullable filename,
                                       NSError *_Nullable error))completion;
 
-- (void)originalDataForAsset:(PHAsset *)asset
-                   completion:(void (^)(NSData *_Nullable data,
-                                         NSString *_Nullable filename,
-                                         NSError *_Nullable error))completion;
+- (nullable PHAssetResource *)uploadResourceForAsset:(PHAsset *)asset;
 
-- (void)pairedLivePhotoVideoForAsset:(PHAsset *)asset
-                           completion:(void (^)(NSData *_Nullable data,
-                                                 NSString *_Nullable filename,
-                                                 NSError *_Nullable error))completion;
+- (nullable PHAssetResource *)pairedVideoResourceForAsset:(PHAsset *)asset;
+
+- (void)streamResource:(PHAssetResource *)resource
+          chunkHandler:(void (^)(NSData *chunk))chunkHandler
+            completion:(void (^)(NSError *_Nullable error))completion;
 
 @end
 

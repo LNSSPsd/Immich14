@@ -95,6 +95,12 @@ static NSError *IMSyncSessionChangedError(void) {
                           deviceAssetId:(NSString *)deviceAssetId
                              completion:(void (^)(NSString *_Nullable livePhotoVideoId))completion
                                   token:(NSObject *)token;
+- (void)streamUploadResource:(PHAssetResource *)resource
+                       asset:(PHAsset *)asset
+            fallbackFilename:(NSString *)fallbackFilename
+            livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                       token:(NSObject *)runToken
+                  completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
 @end
 
 @implementation IMForegroundSync
@@ -197,6 +203,7 @@ static NSError *IMSyncSessionChangedError(void) {
 	self.completionBlock = completion;
 	self.ignoreRetryBackoff = ignoreRetryBackoff;
 	[[IMPhotoLibrary shared] prepareForRequests];
+	[IMMultipartBodyFile removeStaleFiles]; 
 	if (IMBackupDaemonIsDaemonProcess()) {
 		[IMPrefs.shared reloadFromPersistence];
 		[IMSession.shared reloadFromPersistence];
@@ -630,69 +637,99 @@ static NSError *IMSyncSessionChangedError(void) {
 
 	[[IMDatabase shared] setSyncState:IMSyncStateUploading assetId:nil forDeviceAssetId:deviceAssetId];
 
+	PHAssetResource *resource = [[IMPhotoLibrary shared] uploadResourceForAsset:asset];
+	if (!resource) {
+		NSLog(@"IMForegroundSync: no uploadable resource for %@", deviceAssetId);
+		[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+		[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:nil];
+		self.pendingUploadCount++;
+		[self uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
+		return;
+	}
+
 	__weak typeof(self) weakSelf = self;
-	[[IMPhotoLibrary shared] originalDataForAsset:asset
-	                                    completion:^(NSData *_Nullable data, NSString *_Nullable filename, NSError *_Nullable error) {
-		    dispatch_async(dispatch_get_main_queue(), ^{
-			    typeof(self) strongSelf = weakSelf;
-		    if (!strongSelf) {
-			    return;
-		    }
-			    if (![strongSelf ensureMutableRunToken:runToken]) {
-			    return;
-		    }
-				if (!data || !filename) {
-				    NSLog(@"IMForegroundSync: read failed for upload %@: %@", deviceAssetId, error);
-					[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-					[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:error];
-					strongSelf.pendingUploadCount++;
-				    [strongSelf uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
-				    return;
-			    }
-			    [strongSelf fetchAndUploadLiveVideoForAsset:asset
-			                                  deviceAssetId:deviceAssetId
-			                                     completion:^(NSString *_Nullable livePhotoVideoId) {
-				    typeof(self) s3 = weakSelf;
-				    if (!s3) {
-					    return;
-				    }
-				    if (![s3 ensureMutableRunToken:runToken]) {
-					    return;
-				    }
-				    s3.activeNetworkTask = [IMAssetApi uploadAssetData:data
-				                        filename:filename
-				                   fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
-				                  fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
-				                livePhotoVideoId:livePhotoVideoId
-				                      completion:^(NSString *_Nullable uploadedAssetId, NSError *_Nullable uploadError) {
-					    typeof(self) s2 = weakSelf;
-						    if (!s2) {
-							    return;
-						    }
-					    s2.activeNetworkTask = nil;
-							    if (![s2 ensureMutableRunToken:runToken]) {
-								    return;
-							    }
-							if (uploadedAssetId) {
-								[[IMDatabase shared] setSyncState:IMSyncStateSynced assetId:uploadedAssetId forDeviceAssetId:deviceAssetId];
-								[[IMBackupQueue shared] markSucceededDeviceAssetId:deviceAssetId];
-								s2.syncedCount++;
-						    s2.uploadedCount++;
-						    if (asset.creationDate) {
-							    [s2.pendingChangedBuckets addObject:IMTimeBucketKeyForDate(asset.creationDate)];
-						    }
-							} else {
-						    NSLog(@"IMForegroundSync: upload failed for %@: %@", deviceAssetId, uploadError);
-								[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
-								[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:uploadError];
-								s2.pendingUploadCount++;
-					    }
-						    [s2 uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
-					    }];
-					    }
-					                                  token:runToken];
-		    });
-	    }];
+	[self fetchAndUploadLiveVideoForAsset:asset
+	                        deviceAssetId:deviceAssetId
+	                           completion:^(NSString *_Nullable livePhotoVideoId) {
+		typeof(self) s3 = weakSelf;
+		if (!s3 || ![s3 ensureMutableRunToken:runToken]) {
+			return;
+		}
+		NSString *fallbackName = asset.mediaType == PHAssetMediaTypeVideo ? @"video.mov" : @"photo.jpg";
+		[s3 streamUploadResource:resource
+		                   asset:asset
+		        fallbackFilename:fallbackName
+		        livePhotoVideoId:livePhotoVideoId
+		                   token:runToken
+		              completion:^(NSString *_Nullable uploadedAssetId, NSError *_Nullable uploadError) {
+			typeof(self) s2 = weakSelf;
+			if (!s2 || ![s2 ensureMutableRunToken:runToken]) {
+				return;
+			}
+			if (uploadedAssetId) {
+				[[IMDatabase shared] setSyncState:IMSyncStateSynced assetId:uploadedAssetId forDeviceAssetId:deviceAssetId];
+				[[IMBackupQueue shared] markSucceededDeviceAssetId:deviceAssetId];
+				s2.syncedCount++;
+				s2.uploadedCount++;
+				if (asset.creationDate) {
+					[s2.pendingChangedBuckets addObject:IMTimeBucketKeyForDate(asset.creationDate)];
+				}
+			} else {
+				NSLog(@"IMForegroundSync: upload failed for %@: %@", deviceAssetId, uploadError);
+				[[IMDatabase shared] setSyncState:IMSyncStateLocalOnly assetId:nil forDeviceAssetId:deviceAssetId];
+				[[IMBackupQueue shared] recordFailureForDeviceAssetId:deviceAssetId error:uploadError];
+				s2.pendingUploadCount++;
+			}
+			[s2 uploadDeviceAssetIds:rest assetsById:assetsById then:then token:runToken];
+		}];
+	}
+	                                token:runToken];
+}
+
+- (void)streamUploadResource:(PHAssetResource *)resource
+                       asset:(PHAsset *)asset
+            fallbackFilename:(NSString *)fallbackFilename
+            livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                       token:(NSObject *)runToken
+                  completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
+	NSString *filename = resource.originalFilename.length > 0 ? resource.originalFilename : fallbackFilename;
+	NSError *bodyError = nil;
+	IMMultipartBodyFile *body = [IMAssetApi uploadBodyWithFilename:filename
+	                                                 fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
+	                                                fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
+	                                              livePhotoVideoId:livePhotoVideoId
+	                                                         error:&bodyError];
+	if (!body) {
+		completion(nil, bodyError);
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[[IMPhotoLibrary shared] streamResource:resource
+	                           chunkHandler:^(NSData *chunk) {
+		                           [body appendFileData:chunk];
+	                           }
+	                             completion:^(NSError *_Nullable readError) {
+		NSError *finishError = nil;
+		BOOL ready = !readError && [body finishWithError:&finishError];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || ![strongSelf ensureMutableRunToken:runToken]) {
+				[body discard];
+				return;
+			}
+			if (!ready) {
+				[body discard];
+				completion(nil, readError ?: finishError);
+				return;
+			}
+			strongSelf.activeNetworkTask = [IMAssetApi uploadAssetBody:body
+			                                                completion:^(NSString *_Nullable assetId, NSError *_Nullable error) {
+				typeof(self) s2 = weakSelf;
+				if (s2) s2.activeNetworkTask = nil;
+				completion(assetId, error);
+			}];
+		});
+	}];
 }
 
 - (void)fetchAndUploadLiveVideoForAsset:(PHAsset *)asset
@@ -702,40 +739,25 @@ static NSError *IMSyncSessionChangedError(void) {
 	if (![self ensureMutableRunToken:runToken]) {
 		return;
 	}
-	if (!(asset.mediaSubtypes & PHAssetMediaSubtypePhotoLive)) {
+	PHAssetResource *video = [[IMPhotoLibrary shared] pairedVideoResourceForAsset:asset];
+	if (!video) {
 		completion(nil);
 		return;
 	}
-	[[IMPhotoLibrary shared] pairedLivePhotoVideoForAsset:asset
-	                                            completion:^(NSData *_Nullable data, NSString *_Nullable filename, NSError *_Nullable error) {
-		    dispatch_async(dispatch_get_main_queue(), ^{
-			    if (![self ensureMutableRunToken:runToken]) {
-				    return;
-			    }
-			    if (!data) {
-				    if (error) {
-					    NSLog(@"IMForegroundSync: paired video read failed for %@: %@", deviceAssetId, error);
-				    }
-				    completion(nil);
-				    return;
-			    }
-			    self.activeNetworkTask = [IMAssetApi uploadAssetData:data
-			                        filename:filename ?: @"live.mov"
-			                   fileCreatedAt:IMISO8601StringFromDate(asset.creationDate)
-			                  fileModifiedAt:IMISO8601StringFromDate(asset.modificationDate ?: asset.creationDate)
-			                livePhotoVideoId:nil
-			                      completion:^(NSString *_Nullable videoAssetId, NSError *_Nullable uploadError) {
-				    self.activeNetworkTask = nil;
-				    if (![self ensureMutableRunToken:runToken]) {
-					    return;
-				    }
-				    if (!videoAssetId) {
-					    NSLog(@"IMForegroundSync: paired video upload failed for %@: %@", deviceAssetId, uploadError);
-				    }
-				    completion(videoAssetId);
-			    }];
-		    });
-	    }];
+	[self streamUploadResource:video
+	                     asset:asset
+	          fallbackFilename:@"live.mov"
+	          livePhotoVideoId:nil
+	                     token:runToken
+	                completion:^(NSString *_Nullable videoAssetId, NSError *_Nullable error) {
+		if (![self ensureMutableRunToken:runToken]) {
+			return;
+		}
+		if (!videoAssetId) {
+			NSLog(@"IMForegroundSync: paired video upload failed for %@: %@", deviceAssetId, error);
+		}
+		completion(videoAssetId);
+	}];
 }
 
 - (void)reportProgress {

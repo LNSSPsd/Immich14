@@ -1007,31 +1007,16 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	    }];
 }
 
-+ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
-                                       filename:(NSString *)filename
-                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
-                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
-                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
-	return [self uploadAssetData:fileData
-	                     filename:filename
-	                fileCreatedAt:fileCreatedAtISO8601
-	               fileModifiedAt:fileModifiedAtISO8601
-	             livePhotoVideoId:nil
-	                   completion:completion];
-}
-
-+ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
-                                       filename:(NSString *)filename
-                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
-                               fileModifiedAt:(NSString *)fileModifiedAtISO8601
-                               livePhotoVideoId:(nullable NSString *)livePhotoVideoId
-	                             completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
-	if (![fileData isKindOfClass:[NSData class]] || fileData.length == 0 ||
-	    ![filename isKindOfClass:[NSString class]] || filename.length == 0 ||
++ (nullable IMMultipartBodyFile *)uploadBodyWithFilename:(NSString *)filename
+                                           fileCreatedAt:(NSString *)fileCreatedAtISO8601
+                                          fileModifiedAt:(NSString *)fileModifiedAtISO8601
+                                        livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                                                   error:(NSError **)error {
+	if (![filename isKindOfClass:[NSString class]] || filename.length == 0 ||
 	    ![fileCreatedAtISO8601 isKindOfClass:[NSString class]] || fileCreatedAtISO8601.length == 0 ||
 	    ![fileModifiedAtISO8601 isKindOfClass:[NSString class]] || fileModifiedAtISO8601.length == 0 ||
 	    (livePhotoVideoId != nil && (![livePhotoVideoId isKindOfClass:[NSString class]] || livePhotoVideoId.length == 0))) {
-		completion(nil, IMAssetAPIError(_(@"Upload data, filename, and creation/modification dates are required.")));
+		if (error) *error = IMAssetAPIError(_(@"Upload filename and creation/modification dates are required."));
 		return nil;
 	}
 	NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionaryWithDictionary:@{
@@ -1042,12 +1027,14 @@ static BOOL IMAssetTimeBucketResponseIsValid(NSDictionary *json) {
 	if (livePhotoVideoId) {
 		fields[@"livePhotoVideoId"] = livePhotoVideoId;
 	}
-	return [[IMApiClient shared] multipartPOST:@"/assets"
-	                                     fields:fields
-	                                  fileField:@"assetData"
-	                                   filename:filename
-	                                   fileData:fileData
-	                                 completion:^(id _Nullable json, NSError *_Nullable error) {
+	return [IMMultipartBodyFile bodyWithFields:fields fileField:@"assetData" filename:filename error:error];
+}
+
++ (nullable NSURLSessionTask *)uploadAssetBody:(IMMultipartBodyFile *)body
+                                    completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion {
+	return [[IMApiClient shared] uploadMultipartBody:body
+	                                            path:@"/assets"
+	                                      completion:^(id _Nullable json, NSError *_Nullable error) {
 		    if (error) {
 			    completion(nil, error);
 			    return;

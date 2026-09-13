@@ -3,6 +3,7 @@
 #import "IMAssetDetail.h"
 #import "IMAssetEdit.h"
 #import "IMOcrLine.h"
+#import "IMApiClient.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -130,18 +131,13 @@ extern NSString *const IMAssetMediaSizePreview;
                                                                     NSDictionary<NSString *, NSString *> *_Nullable matchedAssetIdsById,
                                                                     NSError *_Nullable error))completion;
 
-+ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
-                                       filename:(NSString *)filename
-                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
-                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
-                               livePhotoVideoId:(nullable NSString *)livePhotoVideoId
-                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
-
-+ (nullable NSURLSessionTask *)uploadAssetData:(NSData *)fileData
-                                       filename:(NSString *)filename
-                                  fileCreatedAt:(NSString *)fileCreatedAtISO8601
-                                 fileModifiedAt:(NSString *)fileModifiedAtISO8601
-                                     completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
++ (nullable IMMultipartBodyFile *)uploadBodyWithFilename:(NSString *)filename
+                                           fileCreatedAt:(NSString *)fileCreatedAtISO8601
+                                          fileModifiedAt:(NSString *)fileModifiedAtISO8601
+                                        livePhotoVideoId:(nullable NSString *)livePhotoVideoId
+                                                   error:(NSError **)error;
++ (nullable NSURLSessionTask *)uploadAssetBody:(IMMultipartBodyFile *)body
+                                    completion:(void (^)(NSString *_Nullable assetId, NSError *_Nullable error))completion;
 
 + (void)setFavorite:(BOOL)favorite
        forAssetIds:(NSArray<NSString *> *)assetIds
