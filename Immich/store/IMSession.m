@@ -17,7 +17,8 @@ static NSString *const kKeychainAccount = @"accessToken";
 static NSString *const kDefaultsBaseURL = @"IMSessionBaseURL";
 static NSString *const kDefaultsUserId  = @"IMSessionUserId";
 static NSString *const kDefaultsAuthKind = @"IMSessionAuthKind"; // "apiKey"; absent => Bearer
-static NSString *const kDefaultsPasswordChangeRequired = @"IMSessionPasswordChangeRequired";
+static NSString *const kDefaultsPasswordChangeRequired = @"IMSessionMustChangePassword";
+static NSString *const kLegacyDefaultsPasswordChangeRequired = @"IMSessionPasswordChangeRequired";
 static NSString *const kAuthKindAPIKeyValue = @"apiKey";
 
 #if IM_TROLLSTORE
@@ -114,8 +115,10 @@ static void IMClearAccountScopedState(void) {
 			_authKind = [authKindValue isEqualToString:kAuthKindAPIKeyValue]
 			    ? IMSessionAuthKindAPIKey
 			    : IMSessionAuthKindBearer;
-			_passwordChangeRequired = NO;
+			_passwordChangeRequired = (_authKind == IMSessionAuthKindBearer) &&
+			                          [defaults boolForKey:kDefaultsPasswordChangeRequired];
 		}
+		[defaults removeObjectForKey:kLegacyDefaultsPasswordChangeRequired];
 	}
 	return self;
 }
@@ -147,7 +150,8 @@ static void IMClearAccountScopedState(void) {
 		self.authKind = [authKindValue isEqualToString:kAuthKindAPIKeyValue]
 		    ? IMSessionAuthKindAPIKey
 		    : IMSessionAuthKindBearer;
-		self.passwordChangeRequired = NO;
+		self.passwordChangeRequired = (self.authKind == IMSessionAuthKindBearer) &&
+		                              [defaults boolForKey:kDefaultsPasswordChangeRequired];
 	} else {
 		self.baseURL = nil;
 		self.accessToken = nil;

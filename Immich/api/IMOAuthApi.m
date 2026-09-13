@@ -249,7 +249,7 @@ static NSDictionary *IMOAuthCallbackBody(NSURL *callbackURL,
 		[[IMSession shared] startWithBaseURL:baseURL
 		                       accessToken:response.accessToken
 		                            userId:response.userId
-		             passwordChangeRequired:response.shouldChangePassword];
+		             passwordChangeRequired:response.shouldChangePassword && !response.isAdmin];
 		completion(response, nil);
 	}];
 }

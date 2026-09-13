@@ -138,11 +138,6 @@
 	                                                                 message:promptMessage
 	                                                          preferredStyle:UIAlertControllerStyleAlert];
 	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-		field.placeholder = _(@"Current password");
-		field.secureTextEntry = YES;
-		field.autocorrectionType = UITextAutocorrectionTypeNo;
-	}];
-	[alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
 		field.placeholder = _(@"New password (8+ characters)");
 		field.secureTextEntry = YES;
 		field.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -172,13 +167,10 @@
 		RootViewController *strongSelf = weakSelf;
 		if (!strongSelf) return;
 		NSArray<UITextField *> *fields = alert.textFields;
-		NSString *current = fields.count > 0 ? (fields[0].text ?: @"") : @"";
-		NSString *newPassword = fields.count > 1 ? (fields[1].text ?: @"") : @"";
-		NSString *confirmation = fields.count > 2 ? (fields[2].text ?: @"") : @"";
+		NSString *newPassword = fields.count > 0 ? (fields[0].text ?: @"") : @"";
+		NSString *confirmation = fields.count > 1 ? (fields[1].text ?: @"") : @"";
 		NSString *validationMessage = nil;
-		if (current.length == 0) {
-			validationMessage = _(@"Enter your current password.");
-		} else if (newPassword.length < 8) {
+		if (newPassword.length < 8) {
 			validationMessage = _(@"The new password must contain at least 8 characters.");
 		} else if (![newPassword isEqualToString:confirmation]) {
 			validationMessage = _(@"The new passwords do not match.");
@@ -192,13 +184,11 @@
 		strongSelf.forcedPasswordPromptVisible = NO;
 		strongSelf.forcedPasswordRequestInFlight = YES;
 		strongSelf.tabBar.userInteractionEnabled = NO;
-		[IMAccountApi changePassword:current
-		                 newPassword:newPassword
-		            invalidateSessions:NO
-		                   completion:^(BOOL success, NSError *_Nullable error) {
+		[IMUserApi updateCurrentUserWithFields:@{ @"password": newPassword }
+		                            completion:^(IMUser *_Nullable user, NSError *_Nullable error) {
 			RootViewController *inner = weakSelf;
 			if (!inner) return;
-			if (success && !error) {
+			if (user && !error) {
 				inner.forcedPasswordRequestInFlight = NO;
 				inner.tabBar.userInteractionEnabled = YES;
 				[IMSession.shared clearPasswordChangeRequirement];
