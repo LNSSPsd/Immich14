@@ -12,6 +12,7 @@
 #import <ImageIO/ImageIO.h>
 #import <PhotosUI/PhotosUI.h>
 #import <objc/message.h>
+#include <dlfcn.h>
 
 static NSString *IMVideoCacheDirectory(void) {
 	return [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMVideoCache"];
@@ -27,49 +28,115 @@ static CGFloat IMViewerMaxPixelSize(void) {
 	return MIN(4096, longEdge * 2);
 }
 
-static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPixelSize) {
+static dispatch_queue_t IMViewerDecodeQueue(void) {
+	static dispatch_queue_t queue;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
+		queue = dispatch_queue_create("com.lns.immich-ios-14.viewer-decode", attr);
+	});
+	return queue;
+}
+
+#if IM_TROLLSTORE
+static CFStringRef _Nullable IMImageSourceHardwareAccelerationKey(void) {
+	static CFStringRef key;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		CFStringRef *symbol = dlsym(RTLD_DEFAULT, "kCGImageSourceUseHardwareAcceleration");
+		key = symbol ? *symbol : NULL;
+	});
+	return key;
+}
+#endif
+
+static CGImageRef _Nullable IMCreateOwnedBitmap(CGImageRef image) CF_RETURNS_RETAINED {
+	size_t width = CGImageGetWidth(image);
+	size_t height = CGImageGetHeight(image);
+	if (width == 0 || height == 0) {
+		return NULL;
+	}
+	uint32_t info = kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little;
+	CGColorSpaceRef space = CGImageGetColorSpace(image);
+	CGContextRef context = NULL;
+	if (space && CGColorSpaceGetModel(space) == kCGColorSpaceModelRGB) {
+		context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, info); 
+	}
+	if (!context) {
+		CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+		context = CGBitmapContextCreate(NULL, width, height, 8, 0, srgb, info);
+		CGColorSpaceRelease(srgb);
+	}
+	if (!context) {
+		return NULL;
+	}
+	CGRect rect = CGRectMake(0, 0, width, height);
+	CGContextClearRect(context, rect);
+	CGContextSetBlendMode(context, kCGBlendModeCopy);
+	CGContextDrawImage(context, rect, image);
+
+	const uint8_t *pixels = CGBitmapContextGetData(context);
+	size_t bytesPerRow = CGBitmapContextGetBytesPerRow(context);
+	BOOL drawn = NO;
+	for (size_t row = 0; row < 16 && !drawn; row++) {
+		const uint8_t *line = pixels + (row * (height - 1) / 15) * bytesPerRow;
+		for (size_t column = 0; column < 16; column++) {
+			const uint8_t *pixel = line + (column * (width - 1) / 15) * 4; 
+			if (pixel[0] | pixel[1] | pixel[2]) {
+				drawn = YES;
+				break;
+			}
+		}
+	}
+	CGImageRef result = drawn ? CGBitmapContextCreateImage(context) : NULL;
+	CGContextRelease(context);
+	return result;
+}
+
+static UIImage *_Nullable IMDecodeDownsampled(NSData *data, CGFloat maxPixelSize, BOOL softwareDecode) {
 	CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
 	if (!source) {
 		return nil;
 	}
-	NSDictionary *options = @{
+	NSMutableDictionary *options = [@{
 		(__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
 		(__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
 		(__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
 		(__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(maxPixelSize),
-	};
-	CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+	} mutableCopy];
+#if IM_TROLLSTORE
+	CFStringRef hardwareKey = IMImageSourceHardwareAccelerationKey();
+	if (softwareDecode && hardwareKey) {
+		options[(__bridge NSString *)hardwareKey] = @NO;
+	}
+#else
+	(void)softwareDecode;
+#endif
+	CGImageRef decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
 	CFRelease(source);
-	if (!cgImage) {
+	if (!decoded) {
 		return nil;
 	}
-	UIImage *image = [UIImage imageWithCGImage:cgImage];
-	CGImageRelease(cgImage);
+	CGImageRef owned = IMCreateOwnedBitmap(decoded);
+	CGImageRelease(decoded);
+	if (!owned) {
+		return nil;
+	}
+	UIImage *image = [UIImage imageWithCGImage:owned];
+	CGImageRelease(owned);
 	return image;
+}
+
+static UIImage *_Nullable IMDownsampledImageFromData(NSData *data, CGFloat maxPixelSize) {
+	return IMDecodeDownsampled(data, maxPixelSize, NO) ?: IMDecodeDownsampled(data, maxPixelSize, YES);
 }
 
 static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixelSize) {
 	if (!url.isFileURL || url.path.length == 0) {
 		return nil;
 	}
-	CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
-	if (!source) {
-		return nil;
-	}
-	NSDictionary *options = @{
-		(__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
-		(__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
-		(__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
-		(__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(maxPixelSize),
-	};
-	CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
-	CFRelease(source);
-	if (!cgImage) {
-		return nil;
-	}
-	UIImage *image = [UIImage imageWithCGImage:cgImage];
-	CGImageRelease(cgImage);
-	return image;
+	NSData *data = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:NULL];
+	return data ? IMDownsampledImageFromData(data, maxPixelSize) : nil;
 }
 
 #pragma mark - IMOcrOverlayView (private): visible, same-size text layer + drag-to-select
@@ -503,7 +570,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 			    NSData *pairData = [NSData dataWithContentsOfURL:fileURL options:NSDataReadingMappedIfSafe error:NULL];
 			    if (pairData) [strongSelf stageLivePairImageData:pairData];
 		    }
-		    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		    dispatch_async(IMViewerDecodeQueue(), ^{
 			    UIImage *original = IMDownsampledImageFromURL(fileURL, maxPixelSize);
 			    [[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
 			    dispatch_async(dispatch_get_main_queue(), ^{
@@ -569,7 +636,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		if (!fileURL) {
 			return; 
 		}
-		dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		dispatch_async(IMViewerDecodeQueue(), ^{
 			UIImage *edited = IMDownsampledImageFromURL(fileURL, maxPixelSize);
 			[[NSFileManager defaultManager] removeItemAtURL:fileURL error:NULL];
 			dispatch_async(dispatch_get_main_queue(), ^{
