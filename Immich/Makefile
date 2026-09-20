@@ -108,7 +108,7 @@ ICON_TARGETS := $(addprefix $(APP_DIR)/,$(notdir $(ICON_FILES)))
 
 $(APP_DIR)/%.png: AppIcon/%.png
 	@mkdir -p $(@D)
-	cp $< $@
+	ln $< $@
 
 build/$(APP_NAME).ipa: $(BIN) $(APP_DIR)/Info.plist $(ICON_TARGETS)
 	cd build && rm -f $(APP_NAME).ipa && zip -qr $(APP_NAME).ipa Payload
