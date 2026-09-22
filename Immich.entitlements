@@ -18,5 +18,24 @@
 	<true/>
 	<key>com.apple.private.MobileContainerManager.allowed</key>
 	<true/>
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>AGXDeviceUserClient</string>
+		<string>AGXSharedUserClient</string>
+		<string>AGXCommandQueue</string>
+		<string>IOAccelDevice</string>
+		<string>IOAccelDevice2</string>
+		<string>IOAccelContext</string>
+		<string>IOAccelContext2</string>
+		<string>IOAccelSharedUserClient</string>
+		<string>IOAccelSharedUserClient2</string>
+		<string>IOAccelSubmitter2</string>
+		<string>IOSurfaceRootUserClient</string>
+		<string>AppleAVDUserClient</string>
+		<string>AppleVXDUserClient</string>
+		<string>AppleJPEGDriverUserClient</string>
+		<string>AppleM2ScalerCSCDriverUserClient</string>
+		<string>IOMobileFramebufferUserClient</string>
+	</array>
 </dict>
 </plist>
