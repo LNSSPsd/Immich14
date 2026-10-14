@@ -45,7 +45,6 @@ typedef NS_ENUM(NSInteger, IMAccountRow) {
 	IMAccountRowTrash,
 	IMAccountRowSharedLinks,
 	IMAccountRowArchive,
-	IMAccountRowHidden,
 	IMAccountRowPartners,
 	IMAccountRowTags,
 	IMAccountRowFolders,
@@ -569,9 +568,6 @@ static NSString *const kActionCellId = @"action";
 				case IMAccountRowArchive: {
 					UITableViewCell *cell = [self valueCellWithTitle:_(@"Archive") detail:_(@"Archived photos")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
 				}
-				case IMAccountRowHidden: {
-					UITableViewCell *cell = [self valueCellWithTitle:_(@"Hidden Photos") detail:_(@"Hidden photos")]; cell.selectionStyle=UITableViewCellSelectionStyleDefault; cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator; return cell;
-				}
 				case IMAccountRowPartners: {
 					UITableViewCell *cell = [self valueCellWithTitle:_(@"Partner Sharing") detail:_(@"Shared libraries")];
 					cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -744,9 +740,6 @@ static NSString *const kActionCellId = @"action";
 	}
 	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowArchive) {
 		[self.navigationController pushViewController:[[VisibilityViewController alloc] initWithVisibility:@"archive" title:_(@"Archive")] animated:YES]; return;
-	}
-	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowHidden) {
-		[self.navigationController pushViewController:[[VisibilityViewController alloc] initWithVisibility:@"hidden" title:_(@"Hidden Photos")] animated:YES]; return;
 	}
 	if (indexPath.section == IMSettingsSectionAccount && accountRow == IMAccountRowAdministration && self.user.isAdmin) {
 		[self.navigationController pushViewController:[[AdminUsersViewController alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];

@@ -61,13 +61,14 @@
 		[self.tableView reloadData];
 		return;
 	}
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
-	                                                                                        target:self
-	                                                                                        action:@selector(addPartner)];
-	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Shared Photos")
-	                                                                            style:UIBarButtonItemStylePlain
-	                                                                           target:self
-	                                                                           action:@selector(browseAllSharedPhotos)];
+	UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+	                                                                     target:self
+	                                                                     action:@selector(addPartner)];
+	UIBarButtonItem *sharedPhotos = [[UIBarButtonItem alloc] initWithTitle:_(@"Shared Photos")
+	                                                                 style:UIBarButtonItemStylePlain
+	                                                                target:self
+	                                                                action:@selector(browseAllSharedPhotos)];
+	self.navigationItem.rightBarButtonItems = @[ add, sharedPhotos ];
 	self.refreshControl = [[UIRefreshControl alloc] init];
 	[self.refreshControl addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
 	[self reload];

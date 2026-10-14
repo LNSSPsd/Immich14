@@ -6,6 +6,7 @@
 #import "common.h"
 
 @interface ActivityViewController ()
+@property (nonatomic, strong) UIBarButtonItem *likeButton;
 @property (nonatomic, copy) NSString *albumId;
 @property (nonatomic, copy, nullable) NSString *assetId;
 @property (nonatomic, copy) NSArray<IMActivity *> *activities;
@@ -55,11 +56,12 @@
 	                                                                                          action:@selector(commentTapped)];
 	self.navigationItem.rightBarButtonItem.accessibilityLabel = _(@"Add comment");
 	self.navigationItem.rightBarButtonItem.accessibilityHint = _(@"Post a comment to this album or asset.");
-	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Like")
-	                                                                            style:UIBarButtonItemStylePlain
-	                                                                           target:self
-                                                                           action:@selector(likeTapped)];
-	self.navigationItem.leftBarButtonItem.accessibilityHint = _(@"Add or remove your like.");
+	self.likeButton = [[UIBarButtonItem alloc] initWithTitle:_(@"Like")
+	                                                   style:UIBarButtonItemStylePlain
+	                                                  target:self
+	                                                  action:@selector(likeTapped)];
+	self.likeButton.accessibilityHint = _(@"Add or remove your like.");
+	self.navigationItem.rightBarButtonItems = @[ self.navigationItem.rightBarButtonItem, self.likeButton ];
 	[self reload];
 }
 
@@ -145,20 +147,20 @@
 
 - (void)updateLikeButton {
 	BOOL liked = self.currentUserLike != nil;
-	self.navigationItem.leftBarButtonItem.title = liked ? _(@"Unlike") : _(@"Like");
-	self.navigationItem.leftBarButtonItem.accessibilityLabel = liked ? _(@"Remove like") : _(@"Like");
+	self.likeButton.title = liked ? _(@"Unlike") : _(@"Like");
+	self.likeButton.accessibilityLabel = liked ? _(@"Remove like") : _(@"Like");
 }
 
 - (void)likeTapped {
 	if (self.loading || self.albumId.length == 0) return;
 	IMActivity *existing = [self currentUserLike];
-	self.navigationItem.leftBarButtonItem.enabled = NO;
+	self.likeButton.enabled = NO;
 	__weak typeof(self) weakSelf = self;
 	if (existing) {
 		[IMActivityApi deleteActivityId:existing.activityId completion:^(BOOL success, NSError *error) {
 			ActivityViewController *strongSelf = weakSelf;
 			if (!strongSelf) return;
-			strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+			strongSelf.likeButton.enabled = YES;
 			if (!success || error) { [strongSelf showError:error ?: [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The like could not be removed.")}]]; return; }
 			[strongSelf reload];
 		}];
@@ -167,7 +169,7 @@
 	[IMActivityApi createForAlbumId:self.albumId assetId:self.assetId type:@"like" comment:nil completion:^(IMActivity *activity, NSError *error) {
 		ActivityViewController *strongSelf = weakSelf;
 		if (!strongSelf) return;
-		strongSelf.navigationItem.leftBarButtonItem.enabled = YES;
+		strongSelf.likeButton.enabled = YES;
 		if (!activity || error) { [strongSelf showError:error ?: [NSError errorWithDomain:IMApiErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: _(@"The like could not be added.")}]]; return; }
 		[strongSelf reload];
 	}];

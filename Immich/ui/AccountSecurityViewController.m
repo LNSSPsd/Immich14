@@ -373,17 +373,17 @@ typedef NS_ENUM(NSInteger, IMSecuritySection) {
 
 - (void)willMoveToParentViewController:(UIViewController *)parent {
 	[super willMoveToParentViewController:parent];
-	if (!parent) { /* no retained tasks; NSURLSession callbacks are safely ignored */ }
+	if (!parent) {  }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
 	[super viewDidAppear:animated];
-	if (!self.navigationItem.rightBarButtonItem) {
-		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(createAPIKey)];
-	}
+	NSMutableArray<UIBarButtonItem *> *items = [NSMutableArray arrayWithObject:
+	    [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(createAPIKey)]];
 	if (self.sessions.count > 1) {
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:_(@"Sign Out Others") style:UIBarButtonItemStylePlain target:self action:@selector(signOutOtherSessions)];
+		[items addObject:[[UIBarButtonItem alloc] initWithTitle:_(@"Sign Out Others") style:UIBarButtonItemStylePlain target:self action:@selector(signOutOtherSessions)]];
 	}
+	self.navigationItem.rightBarButtonItems = items;
 }
 
 @end
