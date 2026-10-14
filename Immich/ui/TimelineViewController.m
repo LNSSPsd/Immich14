@@ -789,6 +789,13 @@ static const CGFloat kCellSpacing = 2;
 	return assets[indexPath.item];
 }
 
+- (BOOL)sectionIsFullyLoaded:(NSInteger)section {
+	if (section < 0 || section >= (NSInteger)self.bucketDates.count) {
+		return NO;
+	}
+	return self.bucketAssets[self.bucketDates[section]] != nil;
+}
+
 - (nullable IMTimelineLocalItem *)localItemAtIndexPath:(NSIndexPath *)indexPath {
 	if (indexPath.section < 0 || indexPath.section >= (NSInteger)self.bucketDates.count) {
 		return nil;
@@ -889,17 +896,33 @@ static const CGFloat kCellSpacing = 2;
 		if (!asset && !localItem) {
 			return;
 		}
-		NSArray<IMAsset *> *serverAssets = self.bucketAssets[bucket] ?: @[];
-		NSMutableArray<IMAsset *> *items = [serverAssets mutableCopy];
-		NSMutableDictionary<NSString *, PHAsset *> *localAssets = [NSMutableDictionary dictionary];
-		for (IMTimelineLocalItem *item in self.localItemsByBucket[bucket]) {
-			IMAsset *standIn = [AssetViewController viewerAssetForLocalAsset:item.asset];
-			[items addObject:standIn];
-			localAssets[standIn.assetId] = item.asset;
+		NSInteger firstSection = indexPath.section;
+		while (firstSection > 0 && [self sectionIsFullyLoaded:firstSection - 1]) {
+			firstSection--;
 		}
-		NSInteger startIndex = localItem
-		    ? (NSInteger)serverAssets.count + (indexPath.item - [self serverCountForBucket:bucket])
-		    : indexPath.item;
+		NSInteger lastSection = indexPath.section;
+		while (lastSection + 1 < (NSInteger)self.bucketDates.count && [self sectionIsFullyLoaded:lastSection + 1]) {
+			lastSection++;
+		}
+		NSMutableArray<IMAsset *> *items = [NSMutableArray array];
+		NSMutableDictionary<NSString *, PHAsset *> *localAssets = [NSMutableDictionary dictionary];
+		NSInteger startIndex = 0;
+		for (NSInteger section = firstSection; section <= lastSection; section++) {
+			NSString *sectionBucket = self.bucketDates[section];
+			if (section == indexPath.section) {
+				NSInteger serverCount = (NSInteger)(self.bucketAssets[sectionBucket] ?: @[]).count;
+				startIndex = (NSInteger)items.count +
+				    (localItem ? serverCount + (indexPath.item - [self serverCountForBucket:sectionBucket]) : indexPath.item);
+			}
+			[items addObjectsFromArray:self.bucketAssets[sectionBucket] ?: @[]];
+			for (IMTimelineLocalItem *item in self.localItemsByBucket[sectionBucket]) {
+				IMAsset *standIn = [AssetViewController viewerAssetForLocalAsset:item.asset];
+				[items addObject:standIn];
+				localAssets[standIn.assetId] = item.asset;
+			}
+		}
+		if (firstSection > 0) [self loadBucketIfNeeded:self.bucketDates[firstSection - 1]];
+		if (lastSection + 1 < (NSInteger)self.bucketDates.count) [self loadBucketIfNeeded:self.bucketDates[lastSection + 1]];
 		AssetViewController *viewer = [AssetViewController viewerWithAssets:items
 		                                                        startIndex:startIndex
 		                                                       localAssets:localAssets];
@@ -1772,10 +1795,10 @@ static NSInteger IMFadeTransitionIndex(CGFloat columnIndex) {
 		[neededBuckets addObject:bucket];
 
 		CGFloat cellWidth = attrs.frame.size.width;
-		CGRect badgeFrame = CGRectMake(attrs.frame.origin.x + marginFactor * cellWidth,
-		                                attrs.frame.origin.y + 6,
-		                                spanFactor * cellWidth,
-		                                26);
+		CGFloat badgeWidth = spanFactor * cellWidth;
+		CGFloat badgeX = MIN(attrs.frame.origin.x + marginFactor * cellWidth,
+		                     visibleBounds.size.width - badgeWidth - 4);
+		CGRect badgeFrame = CGRectMake(MAX(4, badgeX), attrs.frame.origin.y + 6, badgeWidth, 26);
 
 		UILabel *badge = self.denseBadgeViewsByBucket[bucket];
 		if (!badge) {

@@ -8,8 +8,8 @@ typedef struct {
 	CGFloat itemHeight;
 	CGFloat xStep; 
 	CGFloat yStep; 
-	CGFloat *origins; 
 	CGFloat contentHeight;
+	BOOL built;
 	CGPoint anchorPoint;
 	CGFloat scale;
 } IMGridLayer;
@@ -18,6 +18,7 @@ typedef struct {
 	NSInteger _sectionCount;
 	CGFloat _width;
 	NSInteger *_counts;
+	NSInteger *_starts; 
 	IMGridLayer _rest;
 	IMGridLayer _front;
 	IMGridLayer _back;
@@ -47,13 +48,12 @@ typedef struct {
 
 - (void)freeBuffers {
 	free(_counts);
-	free(_rest.origins);
-	free(_front.origins);
-	free(_back.origins);
+	free(_starts);
 	_counts = NULL;
-	_rest.origins = NULL;
-	_front.origins = NULL;
-	_back.origins = NULL;
+	_starts = NULL;
+	_rest.built = NO;
+	_front.built = NO;
+	_back.built = NO;
 	_sectionCount = 0;
 }
 
@@ -127,16 +127,12 @@ typedef struct {
 - (CGFloat)restingContentOffsetYForColumns:(NSInteger)columns {
 	IMGridLayer layer = {0};
 	[self buildLayer:&layer columns:columns];
-	CGFloat offset = [self clampedOffsetForLayer:&layer];
-	free(layer.origins);
-	return offset;
+	return [self clampedOffsetForLayer:&layer];
 }
 
 #pragma mark - Geometry
 
 - (void)buildLayer:(IMGridLayer *)layer columns:(NSInteger)columns {
-	free(layer->origins);
-	layer->origins = NULL;
 	if (self.rowMode) {
 		layer->columns = 1;
 		layer->itemWidth = _width;
@@ -150,31 +146,35 @@ typedef struct {
 	layer->yStep = layer->itemHeight + self.spacing;
 	layer->scale = 1;
 	layer->anchorPoint = CGPointZero;
-	if (_sectionCount <= 0) {
-		layer->contentHeight = self.footerHeight;
-		return;
-	}
-	layer->origins = malloc(sizeof(CGFloat) * (size_t)(_sectionCount + 1));
-	CGFloat y = 0;
-	for (NSInteger section = 0; section < _sectionCount; section++) {
-		layer->origins[section] = y;
-		NSInteger count = _counts[section];
-		if (count > 0) {
-			NSInteger rows = (count + layer->columns - 1) / layer->columns;
-			y += rows * layer->yStep; 
-		}
-	}
-	layer->origins[_sectionCount] = y;
-	layer->contentHeight = MAX(0, y - self.spacing) + self.footerHeight;
+	layer->built = YES;
+	NSInteger total = _starts ? _starts[_sectionCount] : 0;
+	NSInteger rows = (total + layer->columns - 1) / layer->columns;
+	layer->contentHeight = MAX(0, rows * layer->yStep - self.spacing) + self.footerHeight;
 }
 
-static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section, NSInteger item) {
-	NSInteger row = item / layer->columns;
-	NSInteger column = item % layer->columns;
-	return CGRectMake(column * layer->xStep,
-	                  layer->origins[section] + row * layer->yStep,
+static inline CGRect IMGridFrameForIndex(const IMGridLayer *layer, NSInteger index) {
+	return CGRectMake((index % layer->columns) * layer->xStep,
+	                  (index / layer->columns) * layer->yStep,
 	                  layer->itemWidth,
 	                  layer->itemHeight);
+}
+
+- (CGRect)frameInLayer:(const IMGridLayer *)layer section:(NSInteger)section item:(NSInteger)item {
+	return IMGridFrameForIndex(layer, _starts[section] + item);
+}
+
+- (NSInteger)sectionForGlobalIndex:(NSInteger)index {
+	NSInteger lo = 0;
+	NSInteger hi = _sectionCount - 1;
+	while (lo < hi) {
+		NSInteger mid = (lo + hi + 1) / 2;
+		if (_starts[mid] <= index) {
+			lo = mid;
+		} else {
+			hi = mid - 1;
+		}
+	}
+	return lo;
 }
 
 - (BOOL)resolvedAnchorSection:(NSInteger *)section item:(NSInteger *)item {
@@ -196,10 +196,10 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
 - (CGPoint)anchorPointInLayer:(const IMGridLayer *)layer {
 	NSInteger section = 0;
 	NSInteger item = 0;
-	if (!layer->origins || ![self resolvedAnchorSection:&section item:&item]) {
+	if (!layer->built || ![self resolvedAnchorSection:&section item:&item]) {
 		return CGPointZero;
 	}
-	CGRect frame = IMGridItemFrame(layer, section, item);
+	CGRect frame = [self frameInLayer:layer section:section item:item];
 	return CGPointMake(frame.origin.x + _anchorFraction.x * frame.size.width,
 	                   frame.origin.y + _anchorFraction.y * frame.size.height);
 }
@@ -260,12 +260,15 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
 		return;
 	}
 	_sectionCount = MAX(0, sections);
-	if (_sectionCount > 0) {
-		_counts = malloc(sizeof(NSInteger) * (size_t)_sectionCount);
-		for (NSInteger section = 0; section < _sectionCount; section++) {
-			_counts[section] = [collectionView numberOfItemsInSection:section];
-		}
+	_counts = malloc(sizeof(NSInteger) * (size_t)MAX(1, _sectionCount));
+	_starts = malloc(sizeof(NSInteger) * (size_t)(_sectionCount + 1));
+	NSInteger total = 0;
+	for (NSInteger section = 0; section < _sectionCount; section++) {
+		_counts[section] = [collectionView numberOfItemsInSection:section];
+		_starts[section] = total;
+		total += _counts[section];
 	}
+	_starts[_sectionCount] = total;
 	[self buildLayer:&_rest columns:_columns];
 	if (_zooming && !self.rowMode) {
 		[self buildLayer:&_front columns:_frontColumns];
@@ -275,7 +278,7 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
 }
 
 - (BOOL)zoomActive {
-	return _zooming && !self.rowMode && _front.origins && _back.origins;
+	return _zooming && !self.rowMode && _front.built && _back.built;
 }
 
 - (CGSize)collectionViewContentSize {
@@ -293,12 +296,12 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
 	UICollectionViewLayoutAttributes *attributes =
 	    [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:indexPath];
 	if ([self zoomActive]) {
-		attributes.frame = [self zoomFrameForNativeFrame:IMGridItemFrame(&_front, indexPath.section, indexPath.item)
+		attributes.frame = [self zoomFrameForNativeFrame:[self frameInLayer:&_front section:indexPath.section item:indexPath.item]
 		                                         inLayer:&_front];
 		attributes.alpha = 1 - _fade;
 		attributes.zIndex = 1;
 	} else {
-		attributes.frame = IMGridItemFrame(&_rest, indexPath.section, indexPath.item);
+		attributes.frame = [self frameInLayer:&_rest section:indexPath.section item:indexPath.item];
 	}
 	return attributes;
 }
@@ -313,7 +316,7 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
 	BOOL valid = indexPath.section >= 0 && indexPath.section < _sectionCount && indexPath.item >= 0 &&
 	             indexPath.item < _counts[indexPath.section];
 	if (valid && [self zoomActive] && _frontColumns != _backColumns) {
-		attributes.frame = [self zoomFrameForNativeFrame:IMGridItemFrame(&_back, indexPath.section, indexPath.item)
+		attributes.frame = [self zoomFrameForNativeFrame:[self frameInLayer:&_back section:indexPath.section item:indexPath.item]
 		                                         inLayer:&_back];
 		attributes.zIndex = 0;
 	} else {
@@ -328,45 +331,44 @@ static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section
                 into:(NSMutableArray<UICollectionViewLayoutAttributes *> *)result
                 back:(BOOL)back
                 zoom:(BOOL)zoom {
-	for (NSInteger section = 0; section < _sectionCount; section++) {
-		if (layer->origins[section + 1] < minY) {
-			continue;
+	NSInteger total = _starts[_sectionCount];
+	if (total <= 0 || maxY < 0) {
+		return;
+	}
+	NSInteger firstRow = MAX(0, (NSInteger)floor(minY / layer->yStep));
+	NSInteger lastRow = (NSInteger)floor(maxY / layer->yStep);
+	NSInteger first = firstRow * layer->columns;
+	NSInteger last = MIN(total - 1, (lastRow + 1) * layer->columns - 1);
+	if (first > last) {
+		return;
+	}
+	NSInteger section = [self sectionForGlobalIndex:first];
+	for (NSInteger index = first; index <= last; index++) {
+		while (section + 1 < _sectionCount && index >= _starts[section + 1]) {
+			section++;
 		}
-		if (layer->origins[section] > maxY) {
-			break;
-		}
-		NSInteger count = _counts[section];
-		if (count <= 0) {
-			continue;
-		}
-		NSInteger firstRow = (NSInteger)floor((minY - layer->origins[section]) / layer->yStep);
-		NSInteger lastRow = (NSInteger)floor((maxY - layer->origins[section]) / layer->yStep);
-		NSInteger first = MAX(0, firstRow * layer->columns);
-		NSInteger last = MIN(count - 1, (lastRow + 1) * layer->columns - 1);
-		for (NSInteger item = first; item <= last; item++) {
-			NSIndexPath *indexPath = [NSIndexPath indexPathForItem:item inSection:section];
-			UICollectionViewLayoutAttributes *attributes;
-			CGRect native = IMGridItemFrame(layer, section, item);
-			if (back) {
-				attributes = [UICollectionViewLayoutAttributes layoutAttributesForSupplementaryViewOfKind:IMTimelineGridLayoutBackLayerKind
-				                                                                            withIndexPath:indexPath];
-				attributes.zIndex = 0;
-			} else {
-				attributes = [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:indexPath];
-				if (zoom) {
-					attributes.alpha = 1 - _fade;
-					attributes.zIndex = 1;
-				}
+		NSIndexPath *indexPath = [NSIndexPath indexPathForItem:index - _starts[section] inSection:section];
+		UICollectionViewLayoutAttributes *attributes;
+		if (back) {
+			attributes = [UICollectionViewLayoutAttributes layoutAttributesForSupplementaryViewOfKind:IMTimelineGridLayoutBackLayerKind
+			                                                                            withIndexPath:indexPath];
+			attributes.zIndex = 0;
+		} else {
+			attributes = [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:indexPath];
+			if (zoom) {
+				attributes.alpha = 1 - _fade;
+				attributes.zIndex = 1;
 			}
-			attributes.frame = zoom ? [self zoomFrameForNativeFrame:native inLayer:layer] : native;
-			[result addObject:attributes];
 		}
+		CGRect native = IMGridFrameForIndex(layer, index);
+		attributes.frame = zoom ? [self zoomFrameForNativeFrame:native inLayer:layer] : native;
+		[result addObject:attributes];
 	}
 }
 
 - (NSArray<UICollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(CGRect)rect {
 	NSMutableArray<UICollectionViewLayoutAttributes *> *result = [NSMutableArray array];
-	if (_sectionCount <= 0 || !_rest.origins) {
+	if (_sectionCount <= 0 || !_rest.built) {
 		return result;
 	}
 	if (![self zoomActive]) {
