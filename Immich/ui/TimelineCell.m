@@ -15,13 +15,20 @@ NSString *const TimelineCellReuseIdentifier = @"TimelineCell";
 @property (nonatomic, strong) UIImageView *selectionCircleView;
 @property (nonatomic, strong, nullable) IMThumbCacheTask *thumbTask;
 @property (nonatomic) PHImageRequestID localRequestId;
+@property (nonatomic, strong, nullable) IMThumbCacheTask *highResTask;
+@property (nonatomic, copy, nullable) NSString *assetId;      
+@property (nonatomic, copy, nullable) NSString *loadedSize;   
 @end
 
 static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
 	if (!date) return fallback ?: @"";
-	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-	formatter.dateStyle = NSDateFormatterMediumStyle;
-	formatter.timeStyle = NSDateFormatterShortStyle;
+	static NSDateFormatter *formatter;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterShortStyle;
+	});
 	return [formatter stringFromDate:date] ?: fallback ?: @"";
 }
 
@@ -37,27 +44,25 @@ static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
 		}
 
 		self.imageView = [[UIImageView alloc] init];
-		self.imageView.translatesAutoresizingMaskIntoConstraints = NO;
 		self.imageView.contentMode = UIViewContentModeScaleAspectFill;
 		self.imageView.clipsToBounds = YES;
+		self.imageView.frame = self.contentView.bounds;
+		self.imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 		[self.contentView addSubview:self.imageView];
 
 		self.durationLabel = [[UILabel alloc] init];
-		self.durationLabel.translatesAutoresizingMaskIntoConstraints = NO;
 		self.durationLabel.font = [UIFont boldSystemFontOfSize:11];
 		self.durationLabel.textColor = UIColor.whiteColor;
 		self.durationLabel.hidden = YES;
 		[self.contentView addSubview:self.durationLabel];
 
 		self.stackLabel = [[UILabel alloc] init];
-		self.stackLabel.translatesAutoresizingMaskIntoConstraints = NO;
 		self.stackLabel.font = [UIFont boldSystemFontOfSize:11];
 		self.stackLabel.textColor = UIColor.whiteColor;
 		self.stackLabel.hidden = YES;
 		[self.contentView addSubview:self.stackLabel];
 
 		self.syncBadgeView = [[UIImageView alloc] init];
-		self.syncBadgeView.translatesAutoresizingMaskIntoConstraints = NO;
 		self.syncBadgeView.tintColor = UIColor.whiteColor;
 		self.syncBadgeView.hidden = YES;
 		self.syncBadgeView.layer.shadowColor = UIColor.blackColor.CGColor;
@@ -67,7 +72,6 @@ static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
 		[self.contentView addSubview:self.syncBadgeView];
 
 		self.selectionCircleView = [[UIImageView alloc] init];
-		self.selectionCircleView.translatesAutoresizingMaskIntoConstraints = NO;
 		self.selectionCircleView.tintColor = UIColor.whiteColor;
 		self.selectionCircleView.hidden = YES;
 		self.selectionCircleView.layer.shadowColor = UIColor.blackColor.CGColor;
@@ -78,29 +82,28 @@ static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
 
 		self.localRequestId = PHInvalidImageRequestID;
 
-		[NSLayoutConstraint activateConstraints:@[
-			[self.imageView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
-			[self.imageView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
-			[self.imageView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
-			[self.imageView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
-
-			[self.durationLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
-			[self.durationLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
-			[self.stackLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
-			[self.stackLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
-
-			[self.syncBadgeView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
-			[self.syncBadgeView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
-			[self.syncBadgeView.widthAnchor constraintEqualToConstant:15],
-			[self.syncBadgeView.heightAnchor constraintEqualToConstant:15],
-
-			[self.selectionCircleView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
-			[self.selectionCircleView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4],
-			[self.selectionCircleView.widthAnchor constraintEqualToConstant:20],
-			[self.selectionCircleView.heightAnchor constraintEqualToConstant:20],
-		]];
 	}
 	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	CGRect bounds = self.contentView.bounds;
+	CGFloat inset = 4;
+	if (!self.durationLabel.hidden) {
+		[self.durationLabel sizeToFit];
+		CGSize size = self.durationLabel.bounds.size;
+		self.durationLabel.frame = CGRectMake(CGRectGetMaxX(bounds) - inset - size.width,
+		                                      CGRectGetMaxY(bounds) - inset - size.height,
+		                                      size.width, size.height);
+	}
+	if (!self.stackLabel.hidden) {
+		[self.stackLabel sizeToFit];
+		CGSize size = self.stackLabel.bounds.size;
+		self.stackLabel.frame = CGRectMake(inset, CGRectGetMaxY(bounds) - inset - size.height, size.width, size.height);
+	}
+	self.syncBadgeView.frame = CGRectMake(inset, CGRectGetMaxY(bounds) - inset - 15, 15, 15);
+	self.selectionCircleView.frame = CGRectMake(CGRectGetMaxX(bounds) - inset - 20, inset, 20, 20);
 }
 
 - (void)setSelectionModeEnabled:(BOOL)selectionModeEnabled {
@@ -180,6 +183,8 @@ static NSString *IMTimelineAccessibilityDate(NSDate *date, NSString *fallback) {
 - (void)cancelPendingRequests {
 	[self.thumbTask cancel];
 	self.thumbTask = nil;
+	[self.highResTask cancel];
+	self.highResTask = nil;
 	if (self.localRequestId != PHInvalidImageRequestID) {
 		[[PHImageManager defaultManager] cancelImageRequest:self.localRequestId];
 		self.localRequestId = PHInvalidImageRequestID;
@@ -209,6 +214,8 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 - (void)configureWithAsset:(nullable IMAsset *)asset {
 	[self cancelPendingRequests];
 	self.imageView.image = nil;
+	self.assetId = asset.assetId;
+	self.loadedSize = nil;
 	self.syncBadgeView.hidden = YES;
 	self.stackLabel.hidden = YES;
 
@@ -228,26 +235,64 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 		NSInteger totalSeconds = asset.durationMs / 1000;
 		self.durationLabel.text = [NSString stringWithFormat:@"%ld:%02ld", (long)(totalSeconds / 60), (long)(totalSeconds % 60)];
 		self.durationLabel.hidden = NO;
+		[self setNeedsLayout];
 	}
 	if (asset.stackId.length > 0 && asset.stackAssetCount > 1) {
 		self.stackLabel.text = [NSString stringWithFormat:@"▦ %ld", (long)asset.stackAssetCount];
 		self.stackLabel.hidden = NO;
+		[self setNeedsLayout];
 	} else {
 		self.stackLabel.hidden = YES;
 	}
 
 	NSString *assetId = asset.assetId;
+	NSString *size = [IMPrefs shared].thumbnailQuality;
 	__weak typeof(self) weakSelf = self;
 	self.thumbTask = [[IMThumbCache shared] thumbnailForAssetId:assetId
-	                                                         size:[IMPrefs shared].thumbnailQuality
+	                                                         size:size
 	                                                   completion:^(UIImage *_Nullable image) {
-		    weakSelf.imageView.image = image;
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || !image || [strongSelf.loadedSize isEqualToString:IMAssetMediaSizePreview]) {
+			    return; 
+		    }
+		    strongSelf.imageView.image = image;
+		    strongSelf.loadedSize = size;
+	    }];
+	if (self.prefersHighResolution) {
+		[self requestHighResolution];
+	}
+}
+
+- (void)setPrefersHighResolution:(BOOL)prefersHighResolution {
+	_prefersHighResolution = prefersHighResolution;
+	if (prefersHighResolution) {
+		[self requestHighResolution];
+	}
+}
+
+- (void)requestHighResolution {
+	if (!self.assetId || self.highResTask || [self.loadedSize isEqualToString:IMAssetMediaSizePreview] ||
+	    [[IMPrefs shared].thumbnailQuality isEqualToString:IMAssetMediaSizePreview]) {
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	self.highResTask = [[IMThumbCache shared] thumbnailForAssetId:self.assetId
+	                                                          size:IMAssetMediaSizePreview
+	                                                    completion:^(UIImage *_Nullable image) {
+		    typeof(self) strongSelf = weakSelf;
+		    if (!strongSelf || !image) {
+			    return;
+		    }
+		    strongSelf.imageView.image = image;
+		    strongSelf.loadedSize = IMAssetMediaSizePreview;
 	    }];
 }
 
 - (void)configureWithLocalAsset:(nullable PHAsset *)asset syncState:(IMSyncState)state {
 	[self cancelPendingRequests];
 	self.imageView.image = nil;
+	self.assetId = nil;
+	self.loadedSize = nil;
 	self.durationLabel.hidden = YES;
 	self.stackLabel.hidden = YES;
 
@@ -288,6 +333,8 @@ static NSString *const kSkeletonAnimationKey = @"skeletonPulse";
 	[self cancelPendingRequests];
 	[self stopSkeletonPulse];
 	self.imageView.image = nil;
+	self.assetId = nil;
+	self.loadedSize = nil;
 	self.durationLabel.hidden = YES;
 	self.syncBadgeView.hidden = YES;
 	self.stackLabel.hidden = YES;

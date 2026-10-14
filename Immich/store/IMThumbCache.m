@@ -11,6 +11,37 @@ static NSUInteger IMDecodedByteCost(UIImage *image) {
 	return (NSUInteger)(image.size.width * scale * image.size.height * scale * 4);
 }
 
+static UIImage *_Nullable IMDecodedImageWithData(NSData *data) {
+	UIImage *image = [UIImage imageWithData:data];
+	CGImageRef source = image.CGImage;
+	if (!source) {
+		return image;
+	}
+	size_t width = CGImageGetWidth(source);
+	size_t height = CGImageGetHeight(source);
+	if (width == 0 || height == 0) {
+		return image;
+	}
+	CGImageAlphaInfo alpha = CGImageGetAlphaInfo(source);
+	BOOL opaque = alpha == kCGImageAlphaNone || alpha == kCGImageAlphaNoneSkipFirst || alpha == kCGImageAlphaNoneSkipLast;
+	uint32_t info = (opaque ? kCGImageAlphaNoneSkipFirst : kCGImageAlphaPremultipliedFirst) | kCGBitmapByteOrder32Little;
+	CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+	CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, info);
+	CGColorSpaceRelease(space);
+	if (!context) {
+		return image;
+	}
+	CGContextDrawImage(context, CGRectMake(0, 0, width, height), source);
+	CGImageRef decoded = CGBitmapContextCreateImage(context);
+	CGContextRelease(context);
+	if (!decoded) {
+		return image;
+	}
+	UIImage *result = [UIImage imageWithCGImage:decoded scale:image.scale orientation:image.imageOrientation];
+	CGImageRelease(decoded);
+	return result;
+}
+
 @implementation IMThumbCacheTask
 - (void)cancel {
 	self.cancelled = YES;
@@ -143,7 +174,7 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 		}
 		NSData *diskData = [NSData dataWithContentsOfFile:path];
 		if (diskData) {
-			UIImage *diskImage = [UIImage imageWithData:diskData];
+			UIImage *diskImage = IMDecodedImageWithData(diskData);
 			if (diskImage) {
 				[weakSelf.memoryCache setObject:diskImage forKey:key cost:IMDecodedByteCost(diskImage)];
 				[[NSFileManager defaultManager] setAttributes:@{ NSFileModificationDate: [NSDate date] }
@@ -176,7 +207,7 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 					    return;
 				    }
 				    dispatch_async(weakSelf.ioQueue, ^{
-					    UIImage *netImage = [UIImage imageWithData:data];
+					    UIImage *netImage = IMDecodedImageWithData(data);
 					    if (netImage) {
 						    [weakSelf.memoryCache setObject:netImage forKey:key cost:IMDecodedByteCost(netImage)];
 						    [data writeToFile:path atomically:YES];
@@ -193,7 +224,7 @@ static const NSUInteger kWritesPerTrimCheck = 100;
 									    return;
 								    }
 								    dispatch_async(weakSelf.ioQueue, ^{
-									    UIImage *fallbackImage = [UIImage imageWithData:fallbackData];
+									    UIImage *fallbackImage = IMDecodedImageWithData(fallbackData);
 									    if (fallbackImage) {
 										    [weakSelf.memoryCache setObject:fallbackImage forKey:key cost:IMDecodedByteCost(fallbackImage)];
 										    [fallbackData writeToFile:path atomically:YES];

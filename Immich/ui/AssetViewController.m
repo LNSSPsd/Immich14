@@ -6,6 +6,7 @@
 #import "IMSharedLinkApi.h"
 #import "SharedLinkEditorViewController.h"
 #import "IMThumbCache.h"
+#import "IMPrefs.h"
 #import "IMSession.h"
 #import "common.h"
 #import <AVFoundation/AVFoundation.h>
@@ -354,6 +355,9 @@ static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixel
 - (void)setOCRVisible:(BOOL)visible;
 - (void)setEditedImage:(nullable UIImage *)image;
 - (void)reloadEditedImage;
+- (void)setActive:(BOOL)active;
+- (void)setChromeHidden:(BOOL)hidden animated:(BOOL)animated;
+- (void)toggleZoomAtPoint:(CGPoint)point;
 @end
 
 @interface AssetPageContentViewController () <UIScrollViewDelegate, PHLivePhotoViewDelegate>
@@ -397,6 +401,15 @@ static UIImage *_Nullable IMDownsampledImageFromURL(NSURL *url, CGFloat maxPixel
 @property (nonatomic) PHImageRequestID localImageRequestId;
 @property (nonatomic) PHImageRequestID localVideoRequestId;
 @property (nonatomic) PHImageRequestID localLiveRequestId;
+
+@property (nonatomic) BOOL active;
+@property (nonatomic) BOOL chromeHidden;
+@property (nonatomic) BOOL ocrRequested;
+@property (nonatomic) BOOL originalRequested;  
+@property (nonatomic) BOOL originalShown;
+@property (nonatomic) BOOL videoRequested;
+@property (nonatomic) NSUInteger activationGeneration; 
+@property (nonatomic) NSInteger shownQuality;   
 @end
 
 static void *IMPlayerLayerReadyForDisplayContext = &IMPlayerLayerReadyForDisplayContext;
@@ -421,21 +434,34 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.view.backgroundColor = UIColor.blackColor;
+	self.view.backgroundColor = UIColor.clearColor;
 
-	self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+	if (@available(iOS 13.0, *)) {
+		self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+	} else {
+		self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+	}
+	self.spinner.color = UIColor.grayColor;
+	self.spinner.hidesWhenStopped = YES;
 	self.spinner.translatesAutoresizingMaskIntoConstraints = NO;
 	[self.view addSubview:self.spinner];
 	[NSLayoutConstraint activateConstraints:@[
 		[self.spinner.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
 		[self.spinner.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
 	]];
-	[self.spinner startAnimating];
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		typeof(self) strongSelf = weakSelf;
+		BOOL showing = strongSelf.asset.isImage ? strongSelf.imageView.image != nil : strongSelf.player != nil;
+		if (strongSelf && strongSelf.errorLabel.hidden && !showing) {
+			[strongSelf.spinner startAnimating];
+		}
+	});
 
 	self.errorLabel = [[UILabel alloc] init];
 	self.errorLabel.translatesAutoresizingMaskIntoConstraints = NO;
 	self.errorLabel.text = _(@"Couldn't load. Tap to retry.");
-	self.errorLabel.textColor = UIColor.whiteColor;
+	self.errorLabel.textColor = UIColor.grayColor;
 	self.errorLabel.textAlignment = NSTextAlignmentCenter;
 	self.errorLabel.numberOfLines = 0;
 	self.errorLabel.hidden = YES;
@@ -469,11 +495,88 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		self.errorLabel.hidden = YES;
 		[self.spinner startAnimating];
 		if (self.asset.isImage) {
+			self.originalRequested = NO;
 			[self startImageLoad];
+			if (self.active) {
+				[self startOriginalLoad];
+			}
 		} else {
-			[self startVideoLoad];
+			self.videoRequested = NO;
+			if (self.active) {
+				[self startVideoLoad];
+			}
 		}
 	}
+}
+
+#pragma mark Activation
+
+- (void)setActive:(BOOL)active {
+	if (_active == active) {
+		return;
+	}
+	_active = active;
+	self.activationGeneration += 1;
+	[self loadViewIfNeeded];
+	if (!active) {
+		if (self.asset.isImage && self.originalRequested && !self.originalShown && !self.localAsset) {
+			[self.loadTask cancel];
+			self.loadTask = nil;
+			self.originalRequested = NO;
+		}
+		[self pauseIfVideo];
+		return;
+	}
+	if (self.asset.isImage) {
+		[self requestOCRIfNeeded];
+		if (!self.originalRequested && !self.localAsset) {
+			NSUInteger generation = self.activationGeneration;
+			__weak typeof(self) weakSelf = self;
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+				typeof(self) strongSelf = weakSelf;
+				if (strongSelf && strongSelf.active && strongSelf.activationGeneration == generation) {
+					[strongSelf startOriginalLoad];
+				}
+			});
+		}
+	} else if (!self.videoRequested) {
+		[self startVideoLoad];
+	}
+}
+
+- (void)setChromeHidden:(BOOL)hidden animated:(BOOL)animated {
+	self.chromeHidden = hidden;
+	void (^apply)(void) = ^{
+		self.videoControlsBar.alpha = hidden ? 0 : 1;
+		self.liveBadgeView.alpha = hidden ? 0 : 1;
+	};
+	if (animated) {
+		[UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:apply completion:nil];
+	} else {
+		apply();
+	}
+}
+
+- (void)toggleZoomAtPoint:(CGPoint)point {
+	if (!self.asset.isImage || !self.imageView.image || !self.hasFitInitialZoom) {
+		return;
+	}
+	UIScrollView *scrollView = self.scrollView;
+	if (scrollView.zoomScale > scrollView.minimumZoomScale + 0.01) {
+		[scrollView setZoomScale:scrollView.minimumZoomScale animated:YES];
+		return;
+	}
+	[self startOriginalLoad]; 
+	CGSize imageSize = self.imageView.image.size;
+	CGSize boundsSize = scrollView.bounds.size;
+	CGFloat fit = scrollView.minimumZoomScale;
+	CGFloat fill = MAX(boundsSize.width / imageSize.width, boundsSize.height / imageSize.height);
+	CGFloat target = fill > fit * 1.3 ? fill : fit * 2.5;
+	target = MIN(target, scrollView.maximumZoomScale);
+	CGPoint inImage = [self.view convertPoint:point toView:self.imageView];
+	CGSize zoomSize = CGSizeMake(boundsSize.width / target, boundsSize.height / target);
+	CGRect rect = CGRectMake(inImage.x - zoomSize.width / 2, inImage.y - zoomSize.height / 2, zoomSize.width, zoomSize.height);
+	[scrollView zoomToRect:rect animated:YES];
 }
 
 #pragma mark Image page
@@ -505,7 +608,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	]];
 
 	if (self.placeholderImage) {
-		[self showImage:self.placeholderImage];
+		[self showImage:self.placeholderImage quality:1];
 	}
 
 	if (self.localAsset) {
@@ -514,9 +617,16 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		return;
 	}
 
+	[self startImageLoad];
+}
+
+- (void)requestOCRIfNeeded {
+	if (self.ocrRequested || self.localAsset || !self.asset.isImage) {
+		return;
+	}
+	self.ocrRequested = YES;
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
-
 	[IMAssetApi ocrLinesForAssetId:assetId
 	                     completion:^(NSArray<IMOcrLine *> *_Nullable lines, NSError *_Nullable error) {
 		    typeof(self) strongSelf = weakSelf;
@@ -531,8 +641,6 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 			    strongSelf.onOCRAvailabilityKnown(ocrLines.count > 0);
 		    }
 	    }];
-
-	[self startImageLoad];
 }
 
 - (void)startImageLoad {
@@ -543,12 +651,33 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	NSString *assetId = self.asset.assetId;
 	__weak typeof(self) weakSelf = self;
 
+	if (self.shownQuality < 1) {
+		[[IMThumbCache shared] thumbnailForAssetId:assetId
+		                                        size:[IMPrefs shared].thumbnailQuality
+		                                  completion:^(UIImage *_Nullable image) {
+			    typeof(self) strongSelf = weakSelf;
+			    if (strongSelf && strongSelf.shownQuality < 1) {
+				    [strongSelf showImage:image quality:1];
+			    }
+		    }];
+	}
 	[[IMThumbCache shared] thumbnailForAssetId:assetId
 	                                        size:IMAssetMediaSizePreview
 	                                  completion:^(UIImage *_Nullable image) {
-		    [weakSelf showImage:image];
+		    typeof(self) strongSelf = weakSelf;
+		    if (strongSelf && strongSelf.shownQuality < 2) {
+			    [strongSelf showImage:image quality:2];
+		    }
 	    }];
+}
 
+- (void)startOriginalLoad {
+	if (self.originalRequested || self.localAsset || !self.asset.isImage) {
+		return;
+	}
+	self.originalRequested = YES;
+	NSString *assetId = self.asset.assetId;
+	__weak typeof(self) weakSelf = self;
 	CGFloat maxPixelSize = IMViewerMaxPixelSize();
 	NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMOriginalCache"];
 	NSString *suffix = self.prefersEditedMedia ? @"edited" : @"original";
@@ -563,6 +692,10 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 			    return;
 		    }
 		    if (!fileURL) {
+			    if (error.code == NSURLErrorCancelled) {
+				    return; 
+			    }
+			    strongSelf.originalRequested = NO;
 			    [strongSelf showLoadError];
 			    return;
 		    }
@@ -579,7 +712,8 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 					    return;
 				    }
 				    if (original) {
-					    [innerSelf showImage:original];
+					    innerSelf.originalShown = YES;
+					    [innerSelf showImage:original quality:3];
 				    } else {
 					    [innerSelf showLoadError];
 				    }
@@ -589,9 +723,17 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 }
 
 - (void)showImage:(nullable UIImage *)image {
+	[self showImage:image quality:3];
+}
+
+- (void)showImage:(nullable UIImage *)image quality:(NSInteger)quality {
 	if (!image) {
 		return;
 	}
+	if (quality < self.shownQuality) {
+		return; 
+	}
+	self.shownQuality = quality;
 	[self.spinner stopAnimating];
 	self.errorLabel.hidden = YES;
 
@@ -616,7 +758,11 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 		return;
 	}
 	self.prefersEditedMedia = NO;
+	self.shownQuality = 0;
+	self.originalRequested = NO;
+	self.originalShown = NO;
 	[self startImageLoad];
+	[self startOriginalLoad];
 }
 
 - (void)reloadEditedImage {
@@ -710,6 +856,10 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	[self recenterImage];
 }
 
+- (void)scrollViewWillBeginZooming:(UIScrollView *)scrollView withView:(nullable UIView *)view {
+	[self startOriginalLoad];
+}
+
 #pragma mark OCR overlay
 
 - (void)setOCRVisible:(BOOL)visible {
@@ -763,7 +913,6 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	}
 
 	[self setUpVideoControls];
-	[self startVideoLoad];
 }
 
 - (UILabel *)makeVideoTimeLabel {
@@ -784,6 +933,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 - (void)setUpVideoControls {
 	UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
 	bar.translatesAutoresizingMaskIntoConstraints = NO;
+	bar.alpha = self.chromeHidden ? 0 : 1;
 	bar.layer.cornerRadius = 12;
 	bar.clipsToBounds = YES;
 	[self.view addSubview:bar];
@@ -816,7 +966,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	[NSLayoutConstraint activateConstraints:@[
 		[bar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
 		[bar.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
-		[bar.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-58],
+		[bar.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-56],
 		[bar.heightAnchor constraintEqualToConstant:44],
 
 		[self.playPauseButton.leadingAnchor constraintEqualToAnchor:bar.contentView.leadingAnchor constant:6],
@@ -846,6 +996,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 }
 
 - (void)startVideoLoad {
+	self.videoRequested = YES;
 	if (self.localAsset) {
 		[self startLocalVideoLoad];
 		return;
@@ -1311,6 +1462,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 	badge.translatesAutoresizingMaskIntoConstraints = NO;
 	badge.layer.cornerRadius = 12;
 	badge.clipsToBounds = YES;
+	badge.alpha = self.chromeHidden ? 0 : 1;
 	[self.view addSubview:badge];
 	self.liveBadgeView = badge;
 
@@ -1332,7 +1484,7 @@ static NSString *IMTimeString(NSTimeInterval seconds) {
 
 	[NSLayoutConstraint activateConstraints:@[
 		[badge.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
-		[badge.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:52],
+		[badge.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:56],
 		[badge.heightAnchor constraintEqualToConstant:24],
 
 		[icon.leadingAnchor constraintEqualToAnchor:badge.contentView.leadingAnchor constant:8],
@@ -1438,7 +1590,6 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic) BOOL ownerAware;
 @property (nonatomic, copy) NSDictionary<NSString *, PHAsset *> *localAssets;
 @property (nonatomic, strong) UIButton *infoButton;
-@property (nonatomic, strong) UILabel *localBadgeLabel;
 @property (nonatomic, strong) UIPageViewController *pageViewController;
 @property (nonatomic, strong) UIVisualEffectView *topBar;
 @property (nonatomic, strong) UIVisualEffectView *bottomBar;
@@ -1453,6 +1604,15 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 @property (nonatomic) BOOL slideshowPlaying;
 @property (nonatomic) BOOL slideshowTransitioning;
 @property (nonatomic, strong, nullable) NSTimer *slideshowTimer;
+@property (nonatomic, strong) UIView *backdropView;
+@property (nonatomic) BOOL chromeHidden;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *subtitleLabel;
+@property (nonatomic, strong) UIStackView *topTrailingStack;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, AssetPageContentViewController *> *pageCache;
+@property (nonatomic) NSInteger dismissPanDirection; 
+@property (nonatomic) CGPoint dismissPanStartPoint;
+@property (nonatomic, weak, nullable) UIImageView *dismissHiddenGridView;
 - (BOOL)currentAssetAllowsMutations;
 - (void)shareOriginalFileForAsset:(IMAsset *)asset;
 - (void)createSharedLinkForAsset:(IMAsset *)asset;
@@ -1484,7 +1644,9 @@ static UIImage *_Nullable IMThumbRedrawnToRatio(UIImage *_Nullable thumb, double
 	vc.readOnly = readOnly;
 	vc.ownerAware = ownerAware;
 	vc.favoriteOverrides = [NSMutableDictionary dictionary];
-	vc.modalPresentationStyle = UIModalPresentationFullScreen;
+	vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+	vc.modalPresentationCapturesStatusBarAppearance = YES;
+	vc.pageCache = [NSMutableDictionary dictionary];
 	vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
 	vc.transitioningDelegate = vc;
 	return vc;
@@ -1591,12 +1753,18 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.view.backgroundColor = UIColor.blackColor;
+	self.view.backgroundColor = UIColor.clearColor;
 	[AssetViewController pruneVideoCache];
+
+	self.backdropView = [[UIView alloc] initWithFrame:self.view.bounds];
+	self.backdropView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.backdropView.backgroundColor = [self backdropColor];
+	[self.view addSubview:self.backdropView];
 
 	self.pageViewController = [[UIPageViewController alloc] initWithTransitionStyle:UIPageViewControllerTransitionStyleScroll
 	                                                              navigationOrientation:UIPageViewControllerNavigationOrientationHorizontal
-	                                                                            options:nil];
+	                                                                            options:@{ UIPageViewControllerOptionInterPageSpacingKey: @20 }];
+	self.pageViewController.view.backgroundColor = UIColor.clearColor;
 	self.pageViewController.dataSource = self;
 	self.pageViewController.delegate = self;
 	[self addChildViewController:self.pageViewController];
@@ -1614,20 +1782,148 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 	IMAsset *startAsset = self.assets[self.currentIndex];
 	UIImage *gridThumb = [self.zoomSource zoomTransitionImageViewForAssetId:startAsset.assetId].image;
 	first.placeholderImage = IMThumbRedrawnToRatio(gridThumb, startAsset.ratio);
-	__weak typeof(self) weakSelf = self;
 	[self.pageViewController setViewControllers:@[ first ]
 	                                    direction:UIPageViewControllerNavigationDirectionForward
 	                                     animated:NO
-	                                   completion:^(BOOL finished) {
-		    [first playIfVideo];
-		    (void)weakSelf;
-	    }];
+	                                   completion:nil];
+	[first setActive:YES];
+	[first playIfVideo];
 
 	[self setUpChrome];
 
 	UIPanGestureRecognizer *dismissPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDismissPan:)];
 	dismissPan.delegate = self;
 	[self.view addGestureRecognizer:dismissPan];
+
+	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap:)];
+	doubleTap.numberOfTapsRequired = 2;
+	doubleTap.delegate = self;
+	[self.view addGestureRecognizer:doubleTap];
+	UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleSingleTap:)];
+	singleTap.delegate = self;
+	[singleTap requireGestureRecognizerToFail:doubleTap];
+	[self.view addGestureRecognizer:singleTap];
+
+	[self prepareNeighboursOfIndex:self.currentIndex];
+}
+
+#pragma mark Chrome visibility
+
+- (UIColor *)backdropColor {
+	return self.chromeHidden ? UIColor.blackColor : UIColor.systemBackgroundColor;
+}
+
+- (BOOL)prefersStatusBarHidden {
+	return self.chromeHidden;
+}
+
+- (UIStatusBarAnimation)preferredStatusBarUpdateAnimation {
+	return UIStatusBarAnimationFade;
+}
+
+- (void)setChromeHidden:(BOOL)hidden animated:(BOOL)animated {
+	if (_chromeHidden == hidden) {
+		return;
+	}
+	_chromeHidden = hidden;
+	for (AssetPageContentViewController *page in self.pageCache.allValues) {
+		[page setChromeHidden:hidden animated:animated];
+	}
+	void (^apply)(void) = ^{
+		self.topBar.alpha = hidden ? 0 : 1;
+		self.bottomBar.alpha = hidden ? 0 : 1;
+		self.backdropView.backgroundColor = [self backdropColor];
+		[self setNeedsStatusBarAppearanceUpdate];
+	};
+	if (animated) {
+		[UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:apply completion:nil];
+	} else {
+		apply();
+	}
+}
+
+- (void)handleSingleTap:(UITapGestureRecognizer *)tap {
+	[self setChromeHidden:!self.chromeHidden animated:YES];
+}
+
+- (void)handleDoubleTap:(UITapGestureRecognizer *)tap {
+	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
+	[current toggleZoomAtPoint:[tap locationInView:current.view]];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+	if (![gestureRecognizer isKindOfClass:[UITapGestureRecognizer class]]) {
+		return YES;
+	}
+	for (UIView *view = touch.view; view && view != self.view; view = view.superview) {
+		if ([view isKindOfClass:[UIControl class]] || view == self.topBar || view == self.bottomBar ||
+		    [view isKindOfClass:[UIVisualEffectView class]]) {
+			return NO;
+		}
+		if ([view isKindOfClass:[IMOcrOverlayView class]] && !view.hidden) {
+			return NO;
+		}
+	}
+	return YES;
+}
+
+#pragma mark Title
+
+- (void)updateTitle {
+	if (self.assets.count == 0) {
+		return;
+	}
+	IMAsset *asset = self.currentAsset;
+	PHAsset *local = [self currentLocalAsset];
+	NSDate *date = local ? local.creationDate : IMDateFromServerTimestamp(asset.fileCreatedAt);
+	static NSDateFormatter *relativeFormatter;
+	static NSDateFormatter *weekdayFormatter;
+	static NSDateFormatter *thisYearFormatter;
+	static NSDateFormatter *fullFormatter;
+	static NSDateFormatter *timeFormatter;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		relativeFormatter = [[NSDateFormatter alloc] init];
+		relativeFormatter.dateStyle = NSDateFormatterLongStyle;
+		relativeFormatter.timeStyle = NSDateFormatterNoStyle;
+		relativeFormatter.doesRelativeDateFormatting = YES;
+		weekdayFormatter = [[NSDateFormatter alloc] init];
+		[weekdayFormatter setLocalizedDateFormatFromTemplate:@"EEEE"];
+		thisYearFormatter = [[NSDateFormatter alloc] init];
+		[thisYearFormatter setLocalizedDateFormatFromTemplate:@"MMMMd"];
+		fullFormatter = [[NSDateFormatter alloc] init];
+		[fullFormatter setLocalizedDateFormatFromTemplate:@"yMMMMd"];
+		timeFormatter = [[NSDateFormatter alloc] init];
+		timeFormatter.dateStyle = NSDateFormatterNoStyle;
+		timeFormatter.timeStyle = NSDateFormatterShortStyle;
+	});
+	NSString *title = @"";
+	NSString *subtitle = @"";
+	if (date) {
+		NSCalendar *calendar = NSCalendar.currentCalendar;
+		NSDate *now = [NSDate date];
+		NSInteger days = [calendar components:NSCalendarUnitDay
+		                             fromDate:[calendar startOfDayForDate:date]
+		                               toDate:[calendar startOfDayForDate:now]
+		                              options:0].day;
+		if (days >= 0 && days <= 1) {
+			title = [relativeFormatter stringFromDate:date];
+		} else if (days > 1 && days < 7) {
+			title = [weekdayFormatter stringFromDate:date];
+		} else if ([calendar component:NSCalendarUnitYear fromDate:date] == [calendar component:NSCalendarUnitYear fromDate:now]) {
+			title = [thisYearFormatter stringFromDate:date];
+		} else {
+			title = [fullFormatter stringFromDate:date];
+		}
+		subtitle = [timeFormatter stringFromDate:date];
+	}
+	if (local) {
+		subtitle = subtitle.length ? [NSString stringWithFormat:@"%@ · %@", subtitle, _(@"Not uploaded yet")] : _(@"Not uploaded yet");
+	} else if (asset.city.length > 0) {
+		subtitle = subtitle.length ? [NSString stringWithFormat:@"%@ · %@", subtitle, asset.city] : asset.city;
+	}
+	self.titleLabel.text = title;
+	self.subtitleLabel.text = subtitle;
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -1638,98 +1934,159 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 - (void)setUpChrome {
 	self.topBar = [self blurBar];
 	[self.view addSubview:self.topBar];
+	UIView *topRow = [[UIView alloc] init];
+	topRow.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.topBar.contentView addSubview:topRow];
 
-	UIButton *closeButton = [self chromeButtonWithSymbol:@"xmark.circle.fill"];
+	UIButton *closeButton = [self chromeButtonWithSymbol:@"chevron.left"];
+	if (@available(iOS 13.0, *)) {
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold];
+		[closeButton setImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:config] forState:UIControlStateNormal];
+	}
+	closeButton.accessibilityLabel = _(@"Back");
 	[closeButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-	[self.topBar.contentView addSubview:closeButton];
+	[topRow addSubview:closeButton];
+
+	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+	self.titleLabel.textColor = UIColor.labelColor;
+	self.titleLabel.textAlignment = NSTextAlignmentCenter;
+	self.subtitleLabel = [[UILabel alloc] init];
+	self.subtitleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+	self.subtitleLabel.textColor = UIColor.secondaryLabelColor;
+	self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
+	UIStackView *titleStack = [[UIStackView alloc] initWithArrangedSubviews:@[ self.titleLabel, self.subtitleLabel ]];
+	titleStack.axis = UILayoutConstraintAxisVertical;
+	titleStack.alignment = UIStackViewAlignmentCenter;
+	titleStack.spacing = 0;
+	titleStack.translatesAutoresizingMaskIntoConstraints = NO;
+	[topRow addSubview:titleStack];
+
 	self.slideshowButton = [self chromeButtonWithSymbol:@"play.circle"];
 	self.slideshowButton.accessibilityLabel = _(@"Start slideshow");
 	self.slideshowButton.enabled = self.assets.count > 1;
 	[self.slideshowButton addTarget:self action:@selector(toggleSlideshow) forControlEvents:UIControlEventTouchUpInside];
-	[self.topBar.contentView addSubview:self.slideshowButton];
+
+	self.editButton = [UIButton buttonWithType:UIButtonTypeSystem];
+	[self.editButton setTitle:_(@"Edit") forState:UIControlStateNormal];
+	self.editButton.titleLabel.font = [UIFont systemFontOfSize:17];
+	self.editButton.hidden = ![self currentAssetAllowsMutations];
+	self.editButton.accessibilityLabel = _(@"Edit photo");
+	[self.editButton addTarget:self action:@selector(editCurrentAsset) forControlEvents:UIControlEventTouchUpInside];
+
+	self.topTrailingStack = [[UIStackView alloc] initWithArrangedSubviews:@[ self.slideshowButton, self.editButton ]];
+	self.topTrailingStack.axis = UILayoutConstraintAxisHorizontal;
+	self.topTrailingStack.alignment = UIStackViewAlignmentCenter;
+	self.topTrailingStack.spacing = 20;
+	self.topTrailingStack.translatesAutoresizingMaskIntoConstraints = NO;
+	[topRow addSubview:self.topTrailingStack];
 
 	self.bottomBar = [self blurBar];
 	[self.view addSubview:self.bottomBar];
 
 	self.shareButton = [self chromeButtonWithSymbol:@"square.and.arrow.up"];
+	self.shareButton.accessibilityLabel = _(@"Share");
 	[self.shareButton addTarget:self action:@selector(shareTapped) forControlEvents:UIControlEventTouchUpInside];
-	[self.bottomBar.contentView addSubview:self.shareButton];
 
 	self.favoriteButton = [self chromeButtonWithSymbol:@"heart"];
+	self.favoriteButton.accessibilityLabel = _(@"Favorite");
 	self.favoriteButton.hidden = ![self currentAssetAllowsMutations];
 	[self.favoriteButton addTarget:self action:@selector(favoriteTapped) forControlEvents:UIControlEventTouchUpInside];
-	[self.bottomBar.contentView addSubview:self.favoriteButton];
-
-	self.editButton = [self chromeButtonWithSymbol:@"slider.horizontal.3"];
-	self.editButton.hidden = ![self currentAssetAllowsMutations];
-	self.editButton.accessibilityLabel = _(@"Edit photo");
-	[self.editButton addTarget:self action:@selector(editCurrentAsset) forControlEvents:UIControlEventTouchUpInside];
-	[self.bottomBar.contentView addSubview:self.editButton];
-
-	self.addToAlbumButton = [self chromeButtonWithSymbol:@"folder.badge.plus"];
-	self.addToAlbumButton.hidden = ![self currentAssetAllowsMutations];
-	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
-	[self.bottomBar.contentView addSubview:self.addToAlbumButton];
 
 	UIButton *infoButton = [self chromeButtonWithSymbol:@"info.circle"];
+	infoButton.accessibilityLabel = _(@"Info");
 	[infoButton addTarget:self action:@selector(infoTapped) forControlEvents:UIControlEventTouchUpInside];
-	[self.bottomBar.contentView addSubview:infoButton];
 	self.infoButton = infoButton;
 
-	self.localBadgeLabel = [[UILabel alloc] init];
-	self.localBadgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
-	self.localBadgeLabel.text = _(@"Not uploaded yet");
-	self.localBadgeLabel.textColor = [UIColor.whiteColor colorWithAlphaComponent:0.8];
-	self.localBadgeLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-	self.localBadgeLabel.hidden = YES;
-	[self.topBar.contentView addSubview:self.localBadgeLabel];
-	[NSLayoutConstraint activateConstraints:@[
-		[self.localBadgeLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-		[self.localBadgeLabel.centerYAnchor constraintEqualToAnchor:closeButton.centerYAnchor],
-	]];
+	self.addToAlbumButton = [self chromeButtonWithSymbol:@"rectangle.stack.badge.plus"];
+	self.addToAlbumButton.accessibilityLabel = _(@"Add to album");
+	self.addToAlbumButton.hidden = ![self currentAssetAllowsMutations];
+	[self.addToAlbumButton addTarget:self action:@selector(addToAlbumTapped) forControlEvents:UIControlEventTouchUpInside];
 
 	self.ocrButton = [self chromeButtonWithSymbol:@"doc.text.viewfinder"];
+	self.ocrButton.accessibilityLabel = _(@"Recognized text");
+	self.ocrButton.layer.cornerRadius = 8;
 	[self.ocrButton addTarget:self action:@selector(ocrTapped) forControlEvents:UIControlEventTouchUpInside];
 	self.ocrButton.hidden = YES; 
-	[self.bottomBar.contentView addSubview:self.ocrButton];
 
+	NSMutableArray<UIView *> *slots = [NSMutableArray array];
+	for (UIButton *button in @[ self.shareButton, self.favoriteButton, infoButton, self.addToAlbumButton, self.ocrButton ]) {
+		UIView *slot = [[UIView alloc] init];
+		[slot addSubview:button];
+		[NSLayoutConstraint activateConstraints:@[
+			[button.centerXAnchor constraintEqualToAnchor:slot.centerXAnchor],
+			[button.centerYAnchor constraintEqualToAnchor:slot.centerYAnchor],
+			[button.widthAnchor constraintEqualToConstant:44],
+			[button.heightAnchor constraintEqualToConstant:36],
+		]];
+		[slots addObject:slot];
+	}
+	UIStackView *toolbar = [[UIStackView alloc] initWithArrangedSubviews:slots];
+	toolbar.axis = UILayoutConstraintAxisHorizontal;
+	toolbar.distribution = UIStackViewDistributionFillEqually;
+	toolbar.translatesAutoresizingMaskIntoConstraints = NO;
+	[self.bottomBar.contentView addSubview:toolbar];
+
+	UIView *topHairline = [self hairline];
+	[self.topBar.contentView addSubview:topHairline];
+	UIView *bottomHairline = [self hairline];
+	[self.bottomBar.contentView addSubview:bottomHairline];
+	CGFloat hairlineHeight = 1.0 / UIScreen.mainScreen.scale;
+
+	UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
 	[NSLayoutConstraint activateConstraints:@[
 		[self.topBar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
 		[self.topBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
 		[self.topBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-		[self.topBar.bottomAnchor constraintEqualToAnchor:closeButton.bottomAnchor constant:10],
-		[self.slideshowButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
-		[self.slideshowButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:6],
+		[self.topBar.bottomAnchor constraintEqualToAnchor:topRow.bottomAnchor],
 
-		[closeButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
-		[closeButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:6],
+		[topRow.topAnchor constraintEqualToAnchor:safe.topAnchor],
+		[topRow.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+		[topRow.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+		[topRow.heightAnchor constraintEqualToConstant:44],
+
+		[closeButton.leadingAnchor constraintEqualToAnchor:topRow.leadingAnchor constant:6],
+		[closeButton.centerYAnchor constraintEqualToAnchor:topRow.centerYAnchor],
+		[closeButton.widthAnchor constraintEqualToConstant:44],
+		[closeButton.heightAnchor constraintEqualToConstant:44],
+
+		[titleStack.centerXAnchor constraintEqualToAnchor:topRow.centerXAnchor],
+		[titleStack.centerYAnchor constraintEqualToAnchor:topRow.centerYAnchor],
+		[titleStack.leadingAnchor constraintGreaterThanOrEqualToAnchor:closeButton.trailingAnchor constant:8],
+		[titleStack.trailingAnchor constraintLessThanOrEqualToAnchor:self.topTrailingStack.leadingAnchor constant:-8],
+
+		[self.topTrailingStack.trailingAnchor constraintEqualToAnchor:topRow.trailingAnchor constant:-16],
+		[self.topTrailingStack.centerYAnchor constraintEqualToAnchor:topRow.centerYAnchor],
+
+		[topHairline.leadingAnchor constraintEqualToAnchor:self.topBar.leadingAnchor],
+		[topHairline.trailingAnchor constraintEqualToAnchor:self.topBar.trailingAnchor],
+		[topHairline.bottomAnchor constraintEqualToAnchor:self.topBar.bottomAnchor],
+		[topHairline.heightAnchor constraintEqualToConstant:hairlineHeight],
 
 		[self.bottomBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
 		[self.bottomBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
 		[self.bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-		[self.bottomBar.topAnchor constraintEqualToAnchor:infoButton.topAnchor constant:-10],
+		[self.bottomBar.topAnchor constraintEqualToAnchor:toolbar.topAnchor],
 
-		[self.shareButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:16],
-		[self.shareButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+		[toolbar.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:8],
+		[toolbar.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-8],
+		[toolbar.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+		[toolbar.heightAnchor constraintEqualToConstant:44],
 
-		[self.favoriteButton.leadingAnchor constraintEqualToAnchor:self.shareButton.trailingAnchor constant:32],
-		[self.favoriteButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
-
-		[self.editButton.leadingAnchor constraintEqualToAnchor:self.favoriteButton.trailingAnchor constant:24],
-		[self.editButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
-		[self.editButton.trailingAnchor constraintLessThanOrEqualToAnchor:infoButton.leadingAnchor constant:-24],
-
-		[infoButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-		[infoButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-6],
-
-		[self.addToAlbumButton.trailingAnchor constraintEqualToAnchor:self.ocrButton.leadingAnchor constant:-32],
-		[self.addToAlbumButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
-
-		[self.ocrButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-16],
-		[self.ocrButton.centerYAnchor constraintEqualToAnchor:infoButton.centerYAnchor],
+		[bottomHairline.leadingAnchor constraintEqualToAnchor:self.bottomBar.leadingAnchor],
+		[bottomHairline.trailingAnchor constraintEqualToAnchor:self.bottomBar.trailingAnchor],
+		[bottomHairline.topAnchor constraintEqualToAnchor:self.bottomBar.topAnchor],
+		[bottomHairline.heightAnchor constraintEqualToConstant:hairlineHeight],
 	]];
 
 	[self updateActionButtons];
+}
+
+- (UIView *)hairline {
+	UIView *line = [[UIView alloc] init];
+	line.translatesAutoresizingMaskIntoConstraints = NO;
+	line.backgroundColor = UIColor.separatorColor;
+	return line;
 }
 
 - (void)updateActionButtons {
@@ -1738,22 +2095,21 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 	BOOL local = [self currentLocalAsset] != nil;
 	self.addToAlbumButton.hidden = ![self currentAssetAllowsMutations];
 	self.infoButton.hidden = local;
-	self.localBadgeLabel.hidden = !local;
+	[self updateTitle];
 }
 
 - (UIVisualEffectView *)blurBar {
-	UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
+	UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial];
 	UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:effect];
 	blur.translatesAutoresizingMaskIntoConstraints = NO;
 	return blur;
 }
 
 - (UIButton *)chromeButtonWithSymbol:(NSString *)symbolName {
-	UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; 
 	button.translatesAutoresizingMaskIntoConstraints = NO;
-	button.tintColor = UIColor.whiteColor;
 	if (@available(iOS 13.0, *)) {
-		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
 		[button setImage:[UIImage systemImageNamed:symbolName withConfiguration:config] forState:UIControlStateNormal];
 	}
 	return button;
@@ -1773,7 +2129,7 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 	self.slideshowPlaying = YES;
 	self.slideshowButton.accessibilityLabel = _(@"Stop slideshow");
 	if (@available(iOS 13.0, *)) {
-		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
 		[self.slideshowButton setImage:[UIImage systemImageNamed:@"pause.circle" withConfiguration:config] forState:UIControlStateNormal];
 	}
 	[self.slideshowTimer invalidate];
@@ -1792,7 +2148,7 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 	if (!self.slideshowButton) return;
 	self.slideshowButton.accessibilityLabel = _(@"Start slideshow");
 	if (@available(iOS 13.0, *)) {
-		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
 		[self.slideshowButton setImage:[UIImage systemImageNamed:@"play.circle" withConfiguration:config] forState:UIControlStateNormal];
 	}
 }
@@ -1815,8 +2171,14 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 		if (strongSelf) strongSelf.slideshowTransitioning = NO;
 		if (!strongSelf || !finished || !strongSelf.slideshowPlaying) return;
 		AssetPageContentViewController *current = (AssetPageContentViewController *)strongSelf.pageViewController.viewControllers.firstObject;
+		AssetPageContentViewController *previous = strongSelf.pageCache[@(strongSelf.currentIndex)];
+		if (previous != current) {
+			[previous setActive:NO];
+		}
 		strongSelf.currentIndex = [strongSelf indexOfPage:current];
+		[current setActive:YES];
 		[current playIfVideo];
+		[strongSelf prepareNeighboursOfIndex:strongSelf.currentIndex];
 		[strongSelf updateActionButtons];
 		strongSelf.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	}];
@@ -1850,11 +2212,10 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 	self.favoriteButton.enabled = allowsMutations;
 	BOOL favorite = [self isCurrentAssetFavorite];
 	if (@available(iOS 13.0, *)) {
-		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+		UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
 		[self.favoriteButton setImage:[UIImage systemImageNamed:(favorite ? @"heart.fill" : @"heart") withConfiguration:config]
 		                     forState:UIControlStateNormal];
 	}
-	self.favoriteButton.tintColor = favorite ? UIColor.systemRedColor : UIColor.whiteColor;
 }
 
 - (void)updateEditButton {
@@ -2101,9 +2462,8 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 
 - (void)ocrTapped {
 	self.ocrOn = !self.ocrOn;
-	if (@available(iOS 13.0, *)) {
-		self.ocrButton.tintColor = self.ocrOn ? UIColor.systemYellowColor : UIColor.whiteColor;
-	}
+	self.ocrButton.backgroundColor = self.ocrOn ? UIColor.systemBlueColor : UIColor.clearColor;
+	self.ocrButton.tintColor = self.ocrOn ? UIColor.whiteColor : nil;
 	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
 	[current setOCRVisible:self.ocrOn];
 }
@@ -2111,8 +2471,14 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 #pragma mark Paging
 
 - (AssetPageContentViewController *)pageForIndex:(NSInteger)index {
+	AssetPageContentViewController *cached = self.pageCache[@(index)];
+	if (cached) {
+		return cached;
+	}
 	AssetPageContentViewController *page = [[AssetPageContentViewController alloc] initWithAsset:self.assets[index]];
 	page.localAsset = self.localAssets[self.assets[index].assetId];
+	[page setChromeHidden:self.chromeHidden animated:NO];
+	self.pageCache[@(index)] = page;
 	__weak typeof(self) weakSelf = self;
 	__weak AssetPageContentViewController *weakPage = page;
 	page.onOCRAvailabilityKnown = ^(BOOL hasText) {
@@ -2125,6 +2491,42 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 		}
 	};
 	return page;
+}
+
+- (void)prepareNeighboursOfIndex:(NSInteger)index {
+	NSArray *visible = self.pageViewController.viewControllers ?: @[];
+	for (NSNumber *key in self.pageCache.allKeys) {
+		AssetPageContentViewController *page = self.pageCache[key];
+		if (labs(key.integerValue - index) > 1 && ![visible containsObject:page]) {
+			[page setActive:NO];
+			[self.pageCache removeObjectForKey:key];
+		}
+	}
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || strongSelf.currentIndex != index) {
+			return;
+		}
+		for (NSInteger offset = -2; offset <= 2; offset++) {
+			NSInteger neighbour = index + offset;
+			if (offset == 0 || neighbour < 0 || neighbour >= (NSInteger)strongSelf.assets.count) {
+				continue;
+			}
+			IMAsset *asset = strongSelf.assets[neighbour];
+			if (labs(offset) == 1) {
+				AssetPageContentViewController *page = [strongSelf pageForIndex:neighbour];
+				if (!page.isViewLoaded) {
+					page.view.frame = strongSelf.pageViewController.view.bounds;
+					[page.view layoutIfNeeded];
+				}
+			} else if (asset.isImage && !strongSelf.localAssets[asset.assetId]) {
+				[[IMThumbCache shared] thumbnailForAssetId:asset.assetId
+				                                        size:IMAssetMediaSizePreview
+				                                  completion:^(UIImage *_Nullable image) {}];
+			}
+		}
+	});
 }
 
 - (NSInteger)indexOfPage:(AssetPageContentViewController *)page {
@@ -2157,13 +2559,17 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 		return;
 	}
 	self.slideshowTransitioning = NO;
-	for (AssetPageContentViewController *previous in previousViewControllers) {
-		[previous pauseIfVideo];
-	}
 	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
+	for (AssetPageContentViewController *previous in previousViewControllers) {
+		if (previous != current) {
+			[previous setActive:NO];
+		}
+	}
 	self.currentIndex = [self indexOfPage:current];
+	[current setActive:YES];
 	[current playIfVideo];
 	[self updateActionButtons];
+	[self prepareNeighboursOfIndex:self.currentIndex];
 
 	self.ocrButton.hidden = !(current.asset.isImage && current.ocrHasText.boolValue);
 	if (self.ocrOn) {
@@ -2174,36 +2580,99 @@ static NSString *const kLocalViewerAssetIdPrefix = @"local:";
 #pragma mark Swipe-down to dismiss
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+	if (![gestureRecognizer isKindOfClass:[UIPanGestureRecognizer class]]) {
+		return YES;
+	}
 	UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
 	CGPoint velocity = [pan velocityInView:self.view];
 	if (fabs(velocity.y) <= fabs(velocity.x)) {
 		return NO; 
 	}
 	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
-	return [current canBeginDismissPan];
+	if (![current canBeginDismissPan]) {
+		return NO;
+	}
+	return velocity.y > 0 || (![self currentLocalAsset] && !self.infoButton.hidden);
 }
 
 - (void)handleDismissPan:(UIPanGestureRecognizer *)pan {
 	CGPoint translation = [pan translationInView:self.view];
+	UIView *content = self.pageViewController.view;
+	AssetPageContentViewController *current = (AssetPageContentViewController *)self.pageViewController.viewControllers.firstObject;
 	switch (pan.state) {
+		case UIGestureRecognizerStateBegan: {
+			self.dismissPanDirection = [pan velocityInView:self.view].y >= 0 ? 1 : -1;
+			self.dismissPanStartPoint = [pan locationInView:self.view];
+			if (self.dismissPanDirection > 0) {
+				[self stopSlideshow];
+				[current setChromeHidden:YES animated:YES];
+				UIImageView *gridView = [self.zoomSource zoomTransitionImageViewForAssetId:self.currentAsset.assetId];
+				gridView.hidden = YES;
+				self.dismissHiddenGridView = gridView;
+			}
+			break;
+		}
 		case UIGestureRecognizerStateChanged: {
-			CGFloat progress = MAX(0, translation.y) / self.view.bounds.size.height;
-			self.view.transform = CGAffineTransformMakeTranslation(0, MAX(0, translation.y));
-			self.view.alpha = 1.0 - MIN(0.6, progress);
+			if (self.dismissPanDirection < 0) {
+				CGFloat lift = MIN(0, translation.y) * 0.25;
+				content.transform = CGAffineTransformMakeTranslation(0, lift);
+				break;
+			}
+			CGFloat height = MAX(1, self.view.bounds.size.height);
+			CGFloat down = MAX(0, translation.y);
+			CGFloat progress = MIN(1, down / (height * 0.45));
+			CGFloat scale = 1 - 0.45 * MIN(1, down / height);
+			CGPoint center = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds));
+			CGFloat ox = translation.x + (1 - scale) * (self.dismissPanStartPoint.x - center.x);
+			CGFloat oy = translation.y + (1 - scale) * (self.dismissPanStartPoint.y - center.y);
+			content.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), scale, scale);
+			self.backdropView.alpha = 1 - progress;
+			CGFloat chromeAlpha = self.chromeHidden ? 0 : MAX(0, 1 - progress * 4);
+			self.topBar.alpha = chromeAlpha;
+			self.bottomBar.alpha = chromeAlpha;
 			break;
 		}
 		case UIGestureRecognizerStateEnded:
 		case UIGestureRecognizerStateCancelled: {
-			CGFloat velocityY = [pan velocityInView:self.view].y;
-			if (translation.y > 120 || velocityY > 800) {
-				[self dismissViewControllerAnimated:YES completion:nil];
-			} else {
-				[UIView animateWithDuration:0.25
-				                 animations:^{
-					                 self.view.transform = CGAffineTransformIdentity;
-					                 self.view.alpha = 1.0;
-				                 }];
+			CGPoint velocity = [pan velocityInView:self.view];
+			if (self.dismissPanDirection < 0) {
+				BOOL open = pan.state == UIGestureRecognizerStateEnded && (translation.y < -50 || velocity.y < -500);
+				[UIView animateWithDuration:0.3
+				                      delay:0
+				     usingSpringWithDamping:0.85
+				      initialSpringVelocity:0
+				                    options:UIViewAnimationOptionBeginFromCurrentState
+				                 animations:^{ content.transform = CGAffineTransformIdentity; }
+				                 completion:nil];
+				if (open) {
+					[self infoTapped];
+				}
+				self.dismissPanDirection = 0;
+				break;
 			}
+			BOOL dismiss = pan.state == UIGestureRecognizerStateEnded && velocity.y > -100 &&
+			               (translation.y > 100 || velocity.y > 600);
+			UIImageView *gridView = self.dismissHiddenGridView;
+			self.dismissHiddenGridView = nil;
+			self.dismissPanDirection = 0;
+			if (dismiss) {
+				[self dismissViewControllerAnimated:YES completion:^{ gridView.hidden = NO; }];
+				break;
+			}
+			gridView.hidden = NO;
+			[current setChromeHidden:self.chromeHidden animated:YES];
+			[UIView animateWithDuration:0.4
+			                      delay:0
+			     usingSpringWithDamping:0.82
+			      initialSpringVelocity:0
+			                    options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+			                 animations:^{
+				                 content.transform = CGAffineTransformIdentity;
+				                 self.backdropView.alpha = 1;
+				                 self.topBar.alpha = self.chromeHidden ? 0 : 1;
+				                 self.bottomBar.alpha = self.chromeHidden ? 0 : 1;
+			                 }
+			                 completion:nil];
 			break;
 		}
 		default:
