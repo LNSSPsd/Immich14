@@ -101,11 +101,8 @@ static NSString *IMIntegrityPathComponent(NSString *value) {
 		IMIntegrityAsyncReportFailure(completion, IMIntegrityError(_(@"Choose a valid integrity report type.")));
 		return nil;
 	}
-	NSInteger pageLimit = limit > 0 ? MIN(limit, (NSInteger)500) : 100;
-	NSMutableDictionary<NSString *, NSString *> *query = [@{
-		@"type": type,
-		@"limit": [NSString stringWithFormat:@"%ld", (long)pageLimit],
-	} mutableCopy];
+	(void)limit;
+	NSMutableDictionary<NSString *, NSString *> *query = [@{ @"type": type } mutableCopy];
 	if ([cursor isKindOfClass:[NSString class]] && cursor.length > 0) {
 		query[@"cursor"] = cursor;
 	}

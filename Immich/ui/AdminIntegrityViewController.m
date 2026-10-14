@@ -462,6 +462,10 @@ static const NSInteger IMIntegrityPageSize = 100;
 		    : self.reportError
 		    ? (self.items.count ? _(@"Couldn't load more. Tap to retry.") : _(@"Couldn't load findings. Tap to retry."))
 		    : (self.loadingReports ? _(@"Loading more…") : _(@"Load more…"));
+		if (self.reportError.localizedDescription.length) {
+			cell.textLabel.numberOfLines = 0;
+			cell.textLabel.text = [NSString stringWithFormat:@"%@\n%@", cell.textLabel.text, self.reportError.localizedDescription];
+		}
 		cell.accessoryType = UITableViewCellAccessoryNone;
 		cell.accessibilityLabel = cell.textLabel.text;
 		return cell;
