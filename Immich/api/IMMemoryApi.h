@@ -6,6 +6,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface IMMemoryApi : NSObject
 
++ (NSArray<IMMemory *> *)cachedMemories;
+
 + (void)allMemoriesWithCompletion:(void (^)(NSArray<IMMemory *> *_Nullable memories,
                                              NSError *_Nullable error))completion;
 

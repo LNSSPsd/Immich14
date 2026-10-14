@@ -90,6 +90,12 @@ static NSError *IMMemoryValidateBulkResponse(id json, NSArray<NSString *> *reque
 
 @implementation IMMemoryApi
 
+static NSArray<IMMemory *> *gCachedMemories;
+
++ (NSArray<IMMemory *> *)cachedMemories {
+	return gCachedMemories ?: @[];
+}
+
 + (void)allMemoriesWithCompletion:(void (^)(NSArray<IMMemory *> *_Nullable memories,
                                              NSError *_Nullable error))completion {
 	[[IMApiClient shared] GET:@"/memories"
@@ -105,6 +111,7 @@ static NSError *IMMemoryValidateBulkResponse(id json, NSArray<NSString *> *reque
 			completion(nil, IMMemoryMalformedResponse());
 			return;
 		}
+		gCachedMemories = memories;
 		completion(memories, nil);
 	}];
 }

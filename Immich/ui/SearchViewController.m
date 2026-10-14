@@ -9,6 +9,9 @@
 #import "ExploreViewController.h"
 #import "IMSearchFilterViewController.h"
 #import "MemoriesViewController.h"
+#import "IMMemoryApi.h"
+#import "IMMemoryStripCell.h"
+#import "IMMemoryPlayerViewController.h"
 #import "common.h"
 
 typedef NS_ENUM(NSInteger, IMSearchMode) {
@@ -17,14 +20,19 @@ typedef NS_ENUM(NSInteger, IMSearchMode) {
 };
 
 typedef NS_ENUM(NSInteger, IMSearchBrowseSection) {
-	IMSearchBrowseSectionPeople = 0,
-	IMSearchBrowseSectionPlaces = 1,
+	IMSearchBrowseSectionMemories = 0,
+	IMSearchBrowseSectionPeople = 1,
+	IMSearchBrowseSectionPlaces = 2,
+	IMSearchBrowseSectionCount,
 };
+static const CGFloat kMemoryStripHeight = 236;
 
 static NSString *const kHeaderReuseIdentifier = @"SearchSectionHeader";
 
 @interface IMSearchSectionHeader : UICollectionReusableView
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UIButton *actionButton; 
+@property (nonatomic, copy, nullable) void (^onAction)(void);
 @end
 
 @implementation IMSearchSectionHeader
@@ -41,13 +49,35 @@ static NSString *const kHeaderReuseIdentifier = @"SearchSectionHeader";
 		self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
 		self.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
 		[self addSubview:self.titleLabel];
+		self.actionButton = [UIButton buttonWithType:UIButtonTypeSystem];
+		self.actionButton.translatesAutoresizingMaskIntoConstraints = NO;
+		self.actionButton.titleLabel.font = [UIFont systemFontOfSize:15];
+		self.actionButton.hidden = YES;
+		[self.actionButton addTarget:self action:@selector(actionTapped) forControlEvents:UIControlEventTouchUpInside];
+		[self addSubview:self.actionButton];
 		[NSLayoutConstraint activateConstraints:@[
 			[self.titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
-			[self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor constant:-12],
+			[self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.actionButton.leadingAnchor constant:-12],
 			[self.titleLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-6],
+			[self.actionButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+			[self.actionButton.lastBaselineAnchor constraintEqualToAnchor:self.titleLabel.lastBaselineAnchor],
 		]];
 	}
 	return self;
+}
+
+- (void)setOnAction:(void (^)(void))onAction {
+	_onAction = [onAction copy];
+	self.actionButton.hidden = onAction == nil;
+}
+
+- (void)actionTapped {
+	if (self.onAction) self.onAction();
+}
+
+- (void)prepareForReuse {
+	[super prepareForReuse];
+	self.onAction = nil;
 }
 
 @end
@@ -64,7 +94,7 @@ typedef NS_ENUM(NSInteger, IMSearchScope) {
 @property (nonatomic, strong) UISearchController *searchController;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIView *scopeContainer;
-@property (nonatomic, strong) UIView *memoriesRow;
+@property (nonatomic, copy) NSArray<IMMemory *> *memories; 
 @property (nonatomic, strong) UISegmentedControl *scopeControl;
 @property (nonatomic, strong) NSLayoutConstraint *scopeHeightConstraint;
 @property (nonatomic, strong) UIActivityIndicatorView *activityIndicator;
@@ -131,33 +161,6 @@ static const CGFloat kScopeBarHeight = 44;
 	                                                                           action:@selector(showSearchTools)];
 	self.definesPresentationContext = YES;
 
-	self.memoriesRow = [[UIView alloc] init];
-	self.memoriesRow.translatesAutoresizingMaskIntoConstraints = NO;
-	if (@available(iOS 13.0, *)) {
-		self.memoriesRow.backgroundColor = UIColor.secondarySystemBackgroundColor;
-	} else {
-		self.memoriesRow.backgroundColor = UIColor.whiteColor;
-	}
-	self.memoriesRow.isAccessibilityElement = YES;
-	self.memoriesRow.accessibilityLabel = _(@"Memories");
-	self.memoriesRow.accessibilityTraits = UIAccessibilityTraitButton;
-	[self.memoriesRow addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
-	                                                                              action:@selector(showMemories)]];
-	[self.view addSubview:self.memoriesRow];
-
-	UILabel *memoriesLabel = [[UILabel alloc] init];
-	memoriesLabel.translatesAutoresizingMaskIntoConstraints = NO;
-	memoriesLabel.text = _(@"Memories");
-	memoriesLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-	memoriesLabel.textColor = UIColor.labelColor;
-	[self.memoriesRow addSubview:memoriesLabel];
-
-	UIImageView *memoriesChevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-	memoriesChevron.translatesAutoresizingMaskIntoConstraints = NO;
-	memoriesChevron.tintColor = UIColor.tertiaryLabelColor;
-	memoriesChevron.contentMode = UIViewContentModeScaleAspectFit;
-	[self.memoriesRow addSubview:memoriesChevron];
-
 	UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
 	layout.minimumInteritemSpacing = kCellSpacing;
 	layout.minimumLineSpacing = kCellSpacing;
@@ -174,6 +177,7 @@ static const CGFloat kScopeBarHeight = 44;
 	[self.collectionView registerClass:[TimelineCell class] forCellWithReuseIdentifier:TimelineCellReuseIdentifier];
 	[self.collectionView registerClass:[IMPersonCell class] forCellWithReuseIdentifier:IMPersonCellReuseIdentifier];
 	[self.collectionView registerClass:[IMPlaceCell class] forCellWithReuseIdentifier:IMPlaceCellReuseIdentifier];
+	[self.collectionView registerClass:[IMMemoryStripCell class] forCellWithReuseIdentifier:IMMemoryStripCellReuseIdentifier];
 	[self.collectionView registerClass:[IMSearchSectionHeader class]
 	         forSupplementaryViewOfKind:UICollectionElementKindSectionHeader
 	                withReuseIdentifier:kHeaderReuseIdentifier];
@@ -216,20 +220,7 @@ static const CGFloat kScopeBarHeight = 44;
 
 	self.scopeHeightConstraint = [self.scopeContainer.heightAnchor constraintEqualToConstant:0];
 	[NSLayoutConstraint activateConstraints:@[
-		[self.memoriesRow.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-		[self.memoriesRow.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-		[self.memoriesRow.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-		[self.memoriesRow.heightAnchor constraintEqualToConstant:52],
-
-		[memoriesLabel.leadingAnchor constraintEqualToAnchor:self.memoriesRow.leadingAnchor constant:16],
-		[memoriesLabel.centerYAnchor constraintEqualToAnchor:self.memoriesRow.centerYAnchor],
-		[memoriesLabel.trailingAnchor constraintLessThanOrEqualToAnchor:memoriesChevron.leadingAnchor constant:-8],
-		[memoriesChevron.trailingAnchor constraintEqualToAnchor:self.memoriesRow.trailingAnchor constant:-16],
-		[memoriesChevron.centerYAnchor constraintEqualToAnchor:self.memoriesRow.centerYAnchor],
-		[memoriesChevron.widthAnchor constraintEqualToConstant:12],
-		[memoriesChevron.heightAnchor constraintEqualToConstant:20],
-
-		[self.scopeContainer.topAnchor constraintEqualToAnchor:self.memoriesRow.bottomAnchor],
+		[self.scopeContainer.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
 		[self.scopeContainer.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
 		[self.scopeContainer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
 		self.scopeHeightConstraint,
@@ -254,6 +245,7 @@ static const CGFloat kScopeBarHeight = 44;
 	self.people = [IMSearchApi cachedPeople];
 	self.placeAssets = [IMSearchApi cachedPlaceAssets];
 	self.placeCityNames = [IMSearchApi cachedPlaceCityNames];
+	[self applyMemories:[IMMemoryApi cachedMemories]];
 	[self.collectionView reloadData];
 
 	[self loadBrowseData];
@@ -281,7 +273,40 @@ static const CGFloat kScopeBarHeight = 44;
 	[self loadBrowseData];
 }
 
+- (void)applyMemories:(NSArray<IMMemory *> *)memories {
+	NSMutableArray<IMMemory *> *today = [NSMutableArray array];
+	NSMutableArray<IMMemory *> *others = [NSMutableArray array];
+	for (IMMemory *memory in memories) {
+		if (memory.assets.count == 0) continue;
+		[(memory.isActiveToday ? today : others) addObject:memory];
+	}
+	[today addObjectsFromArray:others];
+	self.memories = [today subarrayWithRange:NSMakeRange(0, MIN(today.count, (NSUInteger)20))];
+}
+
+- (void)openMemoryAtIndex:(NSInteger)index cover:(UIImageView *)cover {
+	IMMemoryPlayerViewController *player = [IMMemoryPlayerViewController playerWithMemories:self.memories startIndex:index];
+	player.sourceImageView = cover;
+	__weak typeof(self) weakSelf = self;
+	player.onChange = ^{
+		[IMMemoryApi allMemoriesWithCompletion:^(NSArray<IMMemory *> *_Nullable memories, NSError *_Nullable error) {
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || !memories) return;
+			[strongSelf applyMemories:memories];
+			if (strongSelf.mode == IMSearchModeBrowse) [strongSelf.collectionView reloadData];
+		}];
+	};
+	[self presentViewController:player animated:YES completion:nil];
+}
+
 - (void)loadBrowseData {
+	__weak typeof(self) memoriesSelf = self;
+	[IMMemoryApi allMemoriesWithCompletion:^(NSArray<IMMemory *> *_Nullable memories, NSError *_Nullable error) {
+		typeof(self) strongSelf = memoriesSelf;
+		if (!strongSelf || !memories) return;
+		[strongSelf applyMemories:memories];
+		if (strongSelf.mode == IMSearchModeBrowse) [strongSelf.collectionView reloadData];
+	}];
 	NSInteger generation = ++self.peopleGeneration;
 	self.peopleLoading = YES;
 	__weak typeof(self) weakSelf = self;
@@ -666,8 +691,6 @@ static const CGFloat kScopeBarHeight = 44;
 	};
 	[self startBrowseTask:pageLoader(1, [self browseCompletionWithTitle:[NSString stringWithFormat:@"%@: %@", title, value]
 	                                                               pageLoader:pageLoader])];
-	/* The loader is intentionally used for the first page too, so all three filters share
-	 * the same response validation and pagination behavior. */
 }
 
 #pragma mark - UISearchResultsUpdating
@@ -806,14 +829,22 @@ static const CGFloat kScopeBarHeight = 44;
 #pragma mark - UICollectionViewDataSource
 
 - (NSInteger)numberOfSectionsInCollectionView:(UICollectionView *)collectionView {
-	return self.mode == IMSearchModeBrowse ? 2 : 1;
+	return self.mode == IMSearchModeBrowse ? IMSearchBrowseSectionCount : 1;
 }
 
 - (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
 	if (self.mode == IMSearchModeResults) {
 		return self.resultAssets.count;
 	}
-	return section == IMSearchBrowseSectionPeople ? self.people.count : self.placeAssets.count;
+	return [self browseCountForSection:section];
+}
+
+- (NSInteger)browseCountForSection:(NSInteger)section {
+	switch (section) {
+		case IMSearchBrowseSectionMemories: return self.memories.count ? 1 : 0;
+		case IMSearchBrowseSectionPeople: return (NSInteger)self.people.count;
+		default: return (NSInteger)self.placeAssets.count;
+	}
 }
 
 - (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView
@@ -822,6 +853,16 @@ static const CGFloat kScopeBarHeight = 44;
 		TimelineCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:TimelineCellReuseIdentifier
 		                                                                forIndexPath:indexPath];
 		[cell configureWithAsset:self.resultAssets[indexPath.item]];
+		return cell;
+	}
+	if (indexPath.section == IMSearchBrowseSectionMemories) {
+		IMMemoryStripCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:IMMemoryStripCellReuseIdentifier
+		                                                                     forIndexPath:indexPath];
+		cell.memories = self.memories;
+		__weak typeof(self) weakSelf = self;
+		cell.onSelect = ^(NSInteger index, UIImageView *cover) {
+			[weakSelf openMemoryAtIndex:index cover:cover];
+		};
 		return cell;
 	}
 	if (indexPath.section == IMSearchBrowseSectionPeople) {
@@ -842,7 +883,23 @@ static const CGFloat kScopeBarHeight = 44;
 	IMSearchSectionHeader *header = [collectionView dequeueReusableSupplementaryViewOfKind:kind
 	                                                                 withReuseIdentifier:kHeaderReuseIdentifier
 	                                                                        forIndexPath:indexPath];
-	header.titleLabel.text = indexPath.section == IMSearchBrowseSectionPeople ? _(@"People") : _(@"Places");
+	header.onAction = nil;
+	[header.actionButton setTitle:nil forState:UIControlStateNormal];
+	switch (indexPath.section) {
+		case IMSearchBrowseSectionMemories: {
+			header.titleLabel.text = _(@"Memories");
+			[header.actionButton setTitle:_(@"See All") forState:UIControlStateNormal];
+			__weak typeof(self) weakSelf = self;
+			header.onAction = ^{ [weakSelf showMemories]; };
+			break;
+		}
+		case IMSearchBrowseSectionPeople:
+			header.titleLabel.text = _(@"People");
+			break;
+		default:
+			header.titleLabel.text = _(@"Places");
+			break;
+	}
 	return header;
 }
 
@@ -855,6 +912,9 @@ static const CGFloat kScopeBarHeight = 44;
 	if (self.mode == IMSearchModeResults) {
 		CGFloat side = (width - (kResultColumns - 1) * kCellSpacing) / kResultColumns;
 		return CGSizeMake(side, side);
+	}
+	if (indexPath.section == IMSearchBrowseSectionMemories) {
+		return CGSizeMake(width, kMemoryStripHeight);
 	}
 	if (indexPath.section == IMSearchBrowseSectionPeople) {
 		return CGSizeMake(kPersonCellWidth, kPersonCellHeight);
@@ -869,8 +929,7 @@ static const CGFloat kScopeBarHeight = 44;
 	if (self.mode == IMSearchModeResults) {
 		return CGSizeZero;
 	}
-	NSInteger count = section == IMSearchBrowseSectionPeople ? self.people.count : self.placeAssets.count;
-	return count > 0 ? CGSizeMake(0, 30) : CGSizeZero;
+	return [self browseCountForSection:section] > 0 ? CGSizeMake(0, 30) : CGSizeZero;
 }
 
 #pragma mark - UICollectionViewDelegate
@@ -904,6 +963,9 @@ static const CGFloat kScopeBarHeight = 44;
 
 	if (self.browseTask) {
 		return;
+	}
+	if (indexPath.section == IMSearchBrowseSectionMemories) {
+		return; 
 	}
 	if (indexPath.section == IMSearchBrowseSectionPeople) {
 		[self pushGridForPerson:self.people[indexPath.item]];

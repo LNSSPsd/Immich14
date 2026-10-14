@@ -67,4 +67,39 @@ static id IMMemoryValueOrNil(id value) {
 	return memories;
 }
 
+- (NSString *)displayTitle {
+	NSCalendar *calendar = NSCalendar.currentCalendar;
+	if (self.sourceYear > 0) {
+		NSInteger years = [calendar component:NSCalendarUnitYear fromDate:self.memoryAt] - self.sourceYear;
+		if (years == 1) {
+			return _(@"1 year ago");
+		}
+		if (years > 1) {
+			return [NSString stringWithFormat:_(@"%ld years ago"), (long)years];
+		}
+	}
+	return self.displaySubtitle;
+}
+
+- (NSString *)displaySubtitle {
+	static NSDateFormatter *formatter;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterLongStyle;
+		formatter.timeStyle = NSDateFormatterNoStyle;
+	});
+	NSDate *taken = IMDateFromServerTimestamp(self.assets.firstObject.fileCreatedAt);
+	return [formatter stringFromDate:taken ?: self.memoryAt] ?: @"";
+}
+
+- (BOOL)isActiveToday {
+	NSDate *now = [NSDate date];
+	if (self.showAt || self.hideAt) {
+		return (!self.showAt || [self.showAt compare:now] != NSOrderedDescending) &&
+		       (!self.hideAt || [self.hideAt compare:now] == NSOrderedDescending);
+	}
+	return [NSCalendar.currentCalendar isDateInToday:self.memoryAt];
+}
+
 @end

@@ -36,7 +36,7 @@
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
-	NSArray<NSString *> *titles = @[ _(@"Timeline"), _(@"Search"), _(@"Albums"), _(@"Map"), _(@"Memories"), _(@"Stacks"), _(@"Locked"), _(@"Notifications"), _(@"Sync"), _(@"Settings") ];
+	NSArray<NSString *> *titles = @[ _(@"Timeline"), _(@"Search"), _(@"Albums"), _(@"Memories"), _(@"Map"), _(@"Stacks"), _(@"Locked"), _(@"Notifications"), _(@"Sync"), _(@"Settings") ];
 	BOOL sfSymbols2;
 	if (@available(iOS 14.0, *)) {
 		sfSymbols2 = YES;
@@ -44,7 +44,7 @@
 		sfSymbols2 = NO;
 	}
 	NSArray<NSString *> *symbols = @[
-		@"photo.on.rectangle", @"magnifyingglass", @"rectangle.stack", @"map", @"sparkles", @"square.stack.3d.up", @"lock", @"bell",
+		@"photo.on.rectangle", @"magnifyingglass", @"rectangle.stack", sfSymbols2 ? @"heart.text.square" : @"sparkles", @"map", @"square.stack.3d.up", @"lock", @"bell",
 		sfSymbols2 ? @"arrow.triangle.2.circlepath" : @"arrow.2.circlepath",
 		sfSymbols2 ? @"gearshape" : @"gear"
 	];

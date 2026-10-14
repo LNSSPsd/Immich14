@@ -15,6 +15,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly, getter=isSaved) BOOL saved;
 @property (nonatomic, readonly) NSInteger sourceYear;
 
+@property (nonatomic, readonly) NSString *displayTitle;
+@property (nonatomic, readonly) NSString *displaySubtitle;
+@property (nonatomic, readonly, getter=isActiveToday) BOOL activeToday;
+
 + (nullable instancetype)memoryWithResponseDictionary:(NSDictionary *)dictionary;
 + (NSArray<IMMemory *> *)memoriesWithResponseArray:(NSArray *)array;
 
