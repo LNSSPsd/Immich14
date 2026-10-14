@@ -1,10 +1,10 @@
 #import "IMQueueCommandRequest.h"
+#import "common.h"
 #include <string.h>
 
 static BOOL IMQueueCommandBoolean(id value) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	return type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0);
+	return IMJSONIsBoolean(value);
 }
 
 NSArray<NSString *> *IMQueueNames(void) {

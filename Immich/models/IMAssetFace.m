@@ -1,4 +1,5 @@
 #import "IMAssetFace.h"
+#import "common.h"
 
 #include <math.h>
 #include <string.h>
@@ -20,8 +21,7 @@ static BOOL IMFaceUUIDv4(id value) {
 
 static BOOL IMFaceInteger(id value, BOOL nonnegative) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) return NO;
+	if (IMJSONIsBoolean(value)) return NO;
 	double number = [(NSNumber *)value doubleValue];
 	return isfinite(number) && floor(number) == number && number >= (nonnegative ? 0.0 : -9007199254740991.0) &&
 	       number <= 9007199254740991.0;

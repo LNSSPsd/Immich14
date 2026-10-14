@@ -84,8 +84,7 @@ static BOOL IMAlbumParseNextPage(id rawValue, NSInteger *nextPage, BOOL *hasNext
 	if (![rawValue isKindOfClass:[NSNumber class]]) {
 		return NO;
 	}
-	const char *type = [(NSNumber *)rawValue objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) {
+	if (IMJSONIsBoolean(rawValue)) {
 		return NO;
 	}
 	double numeric = [(NSNumber *)rawValue doubleValue];

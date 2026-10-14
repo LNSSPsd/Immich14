@@ -1,12 +1,12 @@
 #import "IMSessionInfo.h"
+#import "common.h"
 #include <string.h>
 
 static id IMSessionValue(id value) { return [value isKindOfClass:[NSNull class]] ? nil : value; }
 
 static BOOL IMSessionBoolean(id value) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	return type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0);
+	return IMJSONIsBoolean(value);
 }
 
 static BOOL IMSessionUUIDv4(id value) {

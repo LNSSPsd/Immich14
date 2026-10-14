@@ -1,4 +1,5 @@
 #import "IMAssetFaceCreate.h"
+#import "common.h"
 
 #include <math.h>
 #include <string.h>
@@ -23,8 +24,7 @@ static BOOL IMAssetFaceCreateUUIDv4(id value) {
 
 static BOOL IMAssetFaceCreateInteger(id value) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) return NO;
+	if (IMJSONIsBoolean(value)) return NO;
 	double number = [(NSNumber *)value doubleValue];
 	return isfinite(number) && floor(number) == number && number >= -IMAssetFaceCreateMaxSafeInteger &&
 	       number <= IMAssetFaceCreateMaxSafeInteger;

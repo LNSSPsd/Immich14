@@ -44,8 +44,7 @@ static BOOL IMActivityStrictInteger(id value) {
 	if (![value isKindOfClass:[NSNumber class]]) {
 		return NO;
 	}
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) {
+	if (IMJSONIsBoolean(value)) {
 		return NO;
 	}
 	double number = [(NSNumber *)value doubleValue];

@@ -1,4 +1,5 @@
 #import "IMCalendarHeatmap.h"
+#import "common.h"
 #import <math.h>
 #include <string.h>
 
@@ -25,8 +26,7 @@ static BOOL IMCalendarHeatmapDateString(id value) {
 
 static BOOL IMCalendarHeatmapCount(id value, NSInteger *outValue) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) return NO;
+	if (IMJSONIsBoolean(value)) return NO;
 	double numeric = [(NSNumber *)value doubleValue];
 	if (!isfinite(numeric) || floor(numeric) != numeric || numeric < 0.0 ||
 	    numeric > 9007199254740991.0 || numeric > (double)NSIntegerMax) return NO;

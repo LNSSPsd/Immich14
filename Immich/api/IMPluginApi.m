@@ -31,8 +31,7 @@ static BOOL IMPluginAPIStringFilter(NSString *value) {
 
 static BOOL IMPluginAPIBoolean(NSNumber *value) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = value.objCType;
-	return type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0);
+	return IMJSONIsBoolean(value);
 }
 
 static NSDictionary *IMPluginAPIQuery(NSString *description,

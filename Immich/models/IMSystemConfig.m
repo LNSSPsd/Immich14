@@ -1,4 +1,5 @@
 #import "IMSystemConfig.h"
+#import "common.h"
 #include <math.h>
 #include <string.h>
 
@@ -55,16 +56,14 @@ static NSDictionary *IMSystemConfigSection(NSDictionary *dictionary, NSString *n
 static BOOL IMSystemConfigBoolean(NSDictionary *dictionary, NSString *name) {
 	id value = dictionary[name];
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	return type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)
+	return IMJSONIsBoolean(value)
 	    ? [(NSNumber *)value boolValue] : NO;
 }
 
 static NSInteger IMSystemConfigInteger(NSDictionary *dictionary, NSString *name) {
 	id value = dictionary[name];
 	if (![value isKindOfClass:[NSNumber class]]) return 0;
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) return 0;
+	if (IMJSONIsBoolean(value)) return 0;
 	double number = [(NSNumber *)value doubleValue];
 	if (!isfinite(number) || floor(number) != number) return 0;
 	return [(NSNumber *)value integerValue];

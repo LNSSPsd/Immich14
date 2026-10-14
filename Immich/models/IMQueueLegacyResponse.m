@@ -1,11 +1,11 @@
 #import "IMQueueLegacyResponse.h"
+#import "common.h"
 #include <math.h>
 #include <string.h>
 
 static BOOL IMQueueLegacyBoolean(id value) {
 	if (![value isKindOfClass:[NSNumber class]]) return NO;
-	const char *type = [(NSNumber *)value objCType];
-	return type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0);
+	return IMJSONIsBoolean(value);
 }
 
 static BOOL IMQueueLegacyInteger(id value, NSInteger *outValue) {

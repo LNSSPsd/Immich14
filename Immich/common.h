@@ -22,6 +22,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+static inline BOOL IMJSONIsBoolean(id value) {
+	return value != nil && CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID();
+}
+
 extern NSNotificationName const IMSessionDidChangeNotification; 
 
 extern NSNotificationName const IMServerAssetsDidChangeNotification;
@@ -33,6 +37,6 @@ extern NSInteger IMDurationMsFromJSONValue(id _Nullable value);
 
 extern NSString *_Nullable IMTimeBucketKeyForDate(NSDate *_Nullable date);
 
-#endif /* __OBJC__ */
+#endif 
 
-#endif /* IMMICH_COMMON_H */
+#endif 

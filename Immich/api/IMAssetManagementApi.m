@@ -64,7 +64,7 @@ static BOOL IMAssetManagementBoolean(id value) {
 		return NO;
 	}
 	NSNumber *number = (NSNumber *)value;
-	if (strcmp(number.objCType, @encode(BOOL)) != 0) {
+	if (!IMJSONIsBoolean(number)) {
 		return NO;
 	}
 	return number.doubleValue == 0.0 || number.doubleValue == 1.0;

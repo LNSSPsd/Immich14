@@ -1,4 +1,5 @@
 #import "IMMemoryStatistics.h"
+#import "common.h"
 #import <math.h>
 #include <string.h>
 
@@ -16,8 +17,7 @@
 	if (![value isKindOfClass:[NSNumber class]]) {
 		return nil;
 	}
-	const char *type = [(NSNumber *)value objCType];
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) {
+	if (IMJSONIsBoolean(value)) {
 		return nil;
 	}
 	double numeric = [(NSNumber *)value doubleValue];

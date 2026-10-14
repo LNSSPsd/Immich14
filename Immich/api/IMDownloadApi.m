@@ -57,8 +57,7 @@ static BOOL IMDownloadOptionalArchiveSize(NSNumber *archiveSize) {
 	if (![archiveSize isKindOfClass:[NSNumber class]]) {
 		return NO;
 	}
-	const char *type = archiveSize.objCType;
-	if (type && (strcmp(type, @encode(BOOL)) == 0 || strcmp(type, @encode(bool)) == 0)) {
+	if (IMJSONIsBoolean(archiveSize)) {
 		return NO;
 	}
 	double value = archiveSize.doubleValue;
