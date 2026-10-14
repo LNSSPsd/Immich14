@@ -1,29 +1,40 @@
 #import "IMTimelineGridLayout.h"
 
+NSString *const IMTimelineGridLayoutBackLayerKind = @"IMTimelineGridLayoutBackLayer";
+
 typedef struct {
 	NSInteger columns;
 	CGFloat itemWidth;
 	CGFloat itemHeight;
 	CGFloat xStep; 
 	CGFloat yStep; 
-} IMGridGeometry;
+	CGFloat *origins; 
+	CGFloat contentHeight;
+	CGPoint anchorPoint;
+	CGFloat scale;
+} IMGridLayer;
 
 @implementation IMTimelineGridLayout {
 	NSInteger _sectionCount;
 	CGFloat _width;
-	NSInteger *_counts;      
-	CGFloat *_originsFrom;   
-	CGFloat *_originsTo;
-	IMGridGeometry _geometryFrom;
-	IMGridGeometry _geometryTo;
+	NSInteger *_counts;
+	IMGridLayer _rest;
+	IMGridLayer _front;
+	IMGridLayer _back;
+	NSIndexPath *_anchor;
+	CGPoint _anchorFraction;
+	CGPoint _target;
+	CGPoint _zoomContentOffset;
+	CGFloat _zoomContentHeight; 
+	CGFloat _normalizedWidth;
+	CGFloat _fade;
+	CGPoint _blendedTarget;
 }
 
 - (instancetype)init {
 	self = [super init];
 	if (self) {
-		_fromColumns = 1;
-		_toColumns = 1;
-		_progress = 0;
+		_columns = 1;
 		_spacing = 2;
 		_rowHeight = 84;
 	}
@@ -36,24 +47,24 @@ typedef struct {
 
 - (void)freeBuffers {
 	free(_counts);
-	free(_originsFrom);
-	free(_originsTo);
+	free(_rest.origins);
+	free(_front.origins);
+	free(_back.origins);
 	_counts = NULL;
-	_originsFrom = NULL;
-	_originsTo = NULL;
+	_rest.origins = NULL;
+	_front.origins = NULL;
+	_back.origins = NULL;
 	_sectionCount = 0;
 }
 
-- (void)setFromColumns:(NSInteger)fromColumns toColumns:(NSInteger)toColumns progress:(CGFloat)progress {
-	NSInteger from = MAX(1, fromColumns);
-	NSInteger to = MAX(1, toColumns);
-	CGFloat clamped = MAX(0, MIN(1, progress));
-	if (from == _fromColumns && to == _toColumns && clamped == _progress) {
+- (void)setColumns:(NSInteger)columns {
+	NSInteger clamped = MAX(1, columns);
+	if (clamped == _columns && !_zooming) {
 		return;
 	}
-	_fromColumns = from;
-	_toColumns = to;
-	_progress = clamped;
+	_columns = clamped;
+	_zooming = NO;
+	_anchor = nil;
 	[self invalidateLayout];
 }
 
@@ -73,52 +84,165 @@ typedef struct {
 	[self invalidateLayout];
 }
 
+#pragma mark - Zoom
+
+- (void)beginZoomWithAnchor:(NSIndexPath *)anchor
+                   fraction:(CGPoint)fraction
+                     target:(CGPoint)target
+              contentOffset:(CGPoint)contentOffset {
+	_zooming = YES;
+	_anchor = anchor;
+	_anchorFraction = fraction;
+	_target = target;
+	_zoomContentOffset = contentOffset;
+	_zoomContentHeight = MAX(_rest.contentHeight, contentOffset.y + self.collectionView.bounds.size.height);
+	_frontColumns = _columns;
+	_backColumns = _columns;
+	_normalizedWidth = 1.0 / _columns;
+	_fade = 0;
+	[self invalidateLayout];
+}
+
+- (void)setZoomFrontColumns:(NSInteger)frontColumns
+                backColumns:(NSInteger)backColumns
+            normalizedWidth:(CGFloat)normalizedWidth
+                       fade:(CGFloat)fade {
+	if (!_zooming) {
+		return;
+	}
+	_frontColumns = MAX(1, frontColumns);
+	_backColumns = MAX(1, backColumns);
+	_normalizedWidth = normalizedWidth > 0 ? normalizedWidth : 1.0 / _frontColumns;
+	_fade = _frontColumns == _backColumns ? 0 : MAX(0, MIN(1, fade));
+	[self invalidateLayout];
+}
+
+- (void)endZoomAtColumns:(NSInteger)columns {
+	_zooming = NO;
+	_anchor = nil;
+	_columns = MAX(1, columns);
+	[self invalidateLayout];
+}
+
+- (CGFloat)restingContentOffsetYForColumns:(NSInteger)columns {
+	IMGridLayer layer = {0};
+	[self buildLayer:&layer columns:columns];
+	CGFloat offset = [self clampedOffsetForLayer:&layer];
+	free(layer.origins);
+	return offset;
+}
+
 #pragma mark - Geometry
 
-- (IMGridGeometry)geometryForColumns:(NSInteger)columns {
-	IMGridGeometry geometry;
+- (void)buildLayer:(IMGridLayer *)layer columns:(NSInteger)columns {
+	free(layer->origins);
+	layer->origins = NULL;
 	if (self.rowMode) {
-		geometry.columns = 1;
-		geometry.itemWidth = _width;
-		geometry.itemHeight = self.rowHeight;
+		layer->columns = 1;
+		layer->itemWidth = _width;
+		layer->itemHeight = self.rowHeight;
 	} else {
-		geometry.columns = MAX(1, columns);
-		geometry.itemWidth = (_width - (geometry.columns - 1) * self.spacing) / geometry.columns;
-		geometry.itemHeight = geometry.itemWidth;
+		layer->columns = MAX(1, columns);
+		layer->itemWidth = (_width - (layer->columns - 1) * self.spacing) / layer->columns;
+		layer->itemHeight = layer->itemWidth;
 	}
-	geometry.xStep = geometry.itemWidth + self.spacing;
-	geometry.yStep = geometry.itemHeight + self.spacing;
-	return geometry;
-}
-
-static inline CGFloat IMGridSectionHeight(IMGridGeometry geometry, NSInteger count) {
-	if (count <= 0) {
-		return 0;
+	layer->xStep = layer->itemWidth + self.spacing;
+	layer->yStep = layer->itemHeight + self.spacing;
+	layer->scale = 1;
+	layer->anchorPoint = CGPointZero;
+	if (_sectionCount <= 0) {
+		layer->contentHeight = self.footerHeight;
+		return;
 	}
-	NSInteger rows = (count + geometry.columns - 1) / geometry.columns;
-	return rows * geometry.yStep; 
+	layer->origins = malloc(sizeof(CGFloat) * (size_t)(_sectionCount + 1));
+	CGFloat y = 0;
+	for (NSInteger section = 0; section < _sectionCount; section++) {
+		layer->origins[section] = y;
+		NSInteger count = _counts[section];
+		if (count > 0) {
+			NSInteger rows = (count + layer->columns - 1) / layer->columns;
+			y += rows * layer->yStep; 
+		}
+	}
+	layer->origins[_sectionCount] = y;
+	layer->contentHeight = MAX(0, y - self.spacing) + self.footerHeight;
 }
 
-static inline CGRect IMGridItemFrame(IMGridGeometry geometry, CGFloat sectionOrigin, NSInteger item) {
-	NSInteger row = item / geometry.columns;
-	NSInteger column = item % geometry.columns;
-	return CGRectMake(column * geometry.xStep,
-	                  sectionOrigin + row * geometry.yStep,
-	                  geometry.itemWidth,
-	                  geometry.itemHeight);
+static inline CGRect IMGridItemFrame(const IMGridLayer *layer, NSInteger section, NSInteger item) {
+	NSInteger row = item / layer->columns;
+	NSInteger column = item % layer->columns;
+	return CGRectMake(column * layer->xStep,
+	                  layer->origins[section] + row * layer->yStep,
+	                  layer->itemWidth,
+	                  layer->itemHeight);
 }
 
-- (CGFloat)lerp:(CGFloat)from to:(CGFloat)to {
-	return from + (to - from) * self.progress;
+- (BOOL)resolvedAnchorSection:(NSInteger *)section item:(NSInteger *)item {
+	if (!_anchor || _sectionCount <= 0) {
+		return NO;
+	}
+	NSInteger s = MAX(0, MIN(_anchor.section, _sectionCount - 1));
+	while (s > 0 && _counts[s] == 0) {
+		s--;
+	}
+	if (_counts[s] == 0) {
+		return NO;
+	}
+	*section = s;
+	*item = MAX(0, MIN(_anchor.item, _counts[s] - 1));
+	return YES;
 }
 
-- (CGRect)interpolatedFrameForSection:(NSInteger)section item:(NSInteger)item {
-	CGRect a = IMGridItemFrame(_geometryFrom, _originsFrom[section], item);
-	CGRect b = IMGridItemFrame(_geometryTo, _originsTo[section], item);
-	return CGRectMake([self lerp:CGRectGetMinX(a) to:CGRectGetMinX(b)],
-	                  [self lerp:CGRectGetMinY(a) to:CGRectGetMinY(b)],
-	                  [self lerp:a.size.width to:b.size.width],
-	                  [self lerp:a.size.height to:b.size.height]);
+- (CGPoint)anchorPointInLayer:(const IMGridLayer *)layer {
+	NSInteger section = 0;
+	NSInteger item = 0;
+	if (!layer->origins || ![self resolvedAnchorSection:&section item:&item]) {
+		return CGPointZero;
+	}
+	CGRect frame = IMGridItemFrame(layer, section, item);
+	return CGPointMake(frame.origin.x + _anchorFraction.x * frame.size.width,
+	                   frame.origin.y + _anchorFraction.y * frame.size.height);
+}
+
+- (UIEdgeInsets)scrollInsets {
+	UICollectionView *collectionView = self.collectionView;
+	if (@available(iOS 11.0, *)) {
+		return collectionView.adjustedContentInset;
+	}
+	return collectionView.contentInset;
+}
+
+- (CGFloat)clampedOffsetForLayer:(const IMGridLayer *)layer {
+	UIEdgeInsets insets = [self scrollInsets];
+	CGFloat height = self.collectionView.bounds.size.height;
+	CGFloat desired = [self anchorPointInLayer:layer].y - _target.y;
+	CGFloat minOffset = -insets.top;
+	CGFloat maxOffset = MAX(minOffset, layer->contentHeight + insets.bottom - height);
+	return MAX(minOffset, MIN(maxOffset, desired));
+}
+
+- (CGPoint)restingAnchorPositionForLayer:(const IMGridLayer *)layer {
+	CGPoint point = [self anchorPointInLayer:layer];
+	return CGPointMake(point.x, point.y - [self clampedOffsetForLayer:layer]);
+}
+
+- (void)placeLayersForZoom {
+	_front.anchorPoint = [self anchorPointInLayer:&_front];
+	_back.anchorPoint = [self anchorPointInLayer:&_back];
+	_front.scale = _normalizedWidth * _front.columns;
+	_back.scale = _normalizedWidth * _back.columns;
+	CGPoint frontTarget = [self restingAnchorPositionForLayer:&_front];
+	CGPoint backTarget = [self restingAnchorPositionForLayer:&_back];
+	_blendedTarget = CGPointMake(frontTarget.x + (backTarget.x - frontTarget.x) * _fade,
+	                             frontTarget.y + (backTarget.y - frontTarget.y) * _fade);
+}
+
+- (CGRect)zoomFrameForNativeFrame:(CGRect)frame inLayer:(const IMGridLayer *)layer {
+	CGFloat s = layer->scale;
+	return CGRectMake(_blendedTarget.x + s * (frame.origin.x - layer->anchorPoint.x) + _zoomContentOffset.x,
+	                  _blendedTarget.y + s * (frame.origin.y - layer->anchorPoint.y) + _zoomContentOffset.y,
+	                  frame.size.width * s,
+	                  frame.size.height * s);
 }
 
 #pragma mark - UICollectionViewLayout
@@ -132,110 +256,136 @@ static inline CGRect IMGridItemFrame(IMGridGeometry geometry, CGFloat sectionOri
 	}
 	_width = collectionView.bounds.size.width;
 	NSInteger sections = collectionView.numberOfSections;
-	if (sections <= 0 || _width <= 0) {
+	if (_width <= 0) {
 		return;
 	}
-	_sectionCount = sections;
-	_counts = malloc(sizeof(NSInteger) * (size_t)sections);
-	_originsFrom = malloc(sizeof(CGFloat) * (size_t)(sections + 1));
-	_originsTo = malloc(sizeof(CGFloat) * (size_t)(sections + 1));
-	_geometryFrom = [self geometryForColumns:self.fromColumns];
-	_geometryTo = [self geometryForColumns:self.toColumns];
-
-	CGFloat yFrom = 0;
-	CGFloat yTo = 0;
-	for (NSInteger section = 0; section < sections; section++) {
-		NSInteger count = [collectionView numberOfItemsInSection:section];
-		_counts[section] = count;
-		_originsFrom[section] = yFrom;
-		_originsTo[section] = yTo;
-		yFrom += IMGridSectionHeight(_geometryFrom, count);
-		yTo += IMGridSectionHeight(_geometryTo, count);
+	_sectionCount = MAX(0, sections);
+	if (_sectionCount > 0) {
+		_counts = malloc(sizeof(NSInteger) * (size_t)_sectionCount);
+		for (NSInteger section = 0; section < _sectionCount; section++) {
+			_counts[section] = [collectionView numberOfItemsInSection:section];
+		}
 	}
-	_originsFrom[sections] = yFrom;
-	_originsTo[sections] = yTo;
+	[self buildLayer:&_rest columns:_columns];
+	if (_zooming && !self.rowMode) {
+		[self buildLayer:&_front columns:_frontColumns];
+		[self buildLayer:&_back columns:_backColumns];
+		[self placeLayersForZoom];
+	}
+}
+
+- (BOOL)zoomActive {
+	return _zooming && !self.rowMode && _front.origins && _back.origins;
 }
 
 - (CGSize)collectionViewContentSize {
-	if (_sectionCount <= 0) {
-		return CGSizeMake(_width, 0);
+	if ([self zoomActive]) {
+		return CGSizeMake(_width, _zoomContentHeight);
 	}
-	CGFloat height = [self lerp:_originsFrom[_sectionCount] to:_originsTo[_sectionCount]];
-	return CGSizeMake(_width, MAX(0, height - self.spacing) + self.footerHeight);
+	return CGSizeMake(_width, _rest.contentHeight);
 }
 
 - (nullable UICollectionViewLayoutAttributes *)layoutAttributesForItemAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section < 0 || indexPath.section >= _sectionCount) {
-		return nil;
-	}
-	if (indexPath.item < 0 || indexPath.item >= _counts[indexPath.section]) {
+	if (indexPath.section < 0 || indexPath.section >= _sectionCount ||
+	    indexPath.item < 0 || indexPath.item >= _counts[indexPath.section]) {
 		return nil;
 	}
 	UICollectionViewLayoutAttributes *attributes =
 	    [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:indexPath];
-	attributes.frame = [self interpolatedFrameForSection:indexPath.section item:indexPath.item];
+	if ([self zoomActive]) {
+		attributes.frame = [self zoomFrameForNativeFrame:IMGridItemFrame(&_front, indexPath.section, indexPath.item)
+		                                         inLayer:&_front];
+		attributes.alpha = 1 - _fade;
+		attributes.zIndex = 1;
+	} else {
+		attributes.frame = IMGridItemFrame(&_rest, indexPath.section, indexPath.item);
+	}
 	return attributes;
 }
 
-- (NSArray<UICollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(CGRect)rect {
-	NSMutableArray<UICollectionViewLayoutAttributes *> *result = [NSMutableArray array];
-	if (_sectionCount <= 0) {
-		return result;
+- (nullable UICollectionViewLayoutAttributes *)layoutAttributesForSupplementaryViewOfKind:(NSString *)elementKind
+                                                                              atIndexPath:(NSIndexPath *)indexPath {
+	if (![elementKind isEqualToString:IMTimelineGridLayoutBackLayerKind]) {
+		return nil;
 	}
-	CGFloat minY = CGRectGetMinY(rect);
-	CGFloat maxY = CGRectGetMaxY(rect);
+	UICollectionViewLayoutAttributes *attributes =
+	    [UICollectionViewLayoutAttributes layoutAttributesForSupplementaryViewOfKind:elementKind withIndexPath:indexPath];
+	BOOL valid = indexPath.section >= 0 && indexPath.section < _sectionCount && indexPath.item >= 0 &&
+	             indexPath.item < _counts[indexPath.section];
+	if (valid && [self zoomActive] && _frontColumns != _backColumns) {
+		attributes.frame = [self zoomFrameForNativeFrame:IMGridItemFrame(&_back, indexPath.section, indexPath.item)
+		                                         inLayer:&_back];
+		attributes.zIndex = 0;
+	} else {
+		attributes.hidden = YES;
+	}
+	return attributes;
+}
 
+- (void)appendLayer:(const IMGridLayer *)layer
+          nativeMinY:(CGFloat)minY
+          nativeMaxY:(CGFloat)maxY
+                into:(NSMutableArray<UICollectionViewLayoutAttributes *> *)result
+                back:(BOOL)back
+                zoom:(BOOL)zoom {
 	for (NSInteger section = 0; section < _sectionCount; section++) {
-		CGFloat top = [self lerp:_originsFrom[section] to:_originsTo[section]];
-		CGFloat bottom = [self lerp:_originsFrom[section + 1] to:_originsTo[section + 1]];
-		if (bottom < minY) {
+		if (layer->origins[section + 1] < minY) {
 			continue;
 		}
-		if (top > maxY) {
+		if (layer->origins[section] > maxY) {
 			break;
 		}
 		NSInteger count = _counts[section];
 		if (count <= 0) {
 			continue;
 		}
-
-		NSInteger lo = 0;
-		NSInteger hi = count - 1;
-		NSInteger first = count;
-		while (lo <= hi) {
-			NSInteger mid = (lo + hi) / 2;
-			CGRect frame = [self interpolatedFrameForSection:section item:mid];
-			if (CGRectGetMaxY(frame) >= minY) {
-				first = mid;
-				hi = mid - 1;
-			} else {
-				lo = mid + 1;
-			}
-		}
-		if (first >= count) {
-			continue;
-		}
-
-		lo = first;
-		hi = count - 1;
-		NSInteger last = first;
-		while (lo <= hi) {
-			NSInteger mid = (lo + hi) / 2;
-			CGRect frame = [self interpolatedFrameForSection:section item:mid];
-			if (CGRectGetMinY(frame) <= maxY) {
-				last = mid;
-				lo = mid + 1;
-			} else {
-				hi = mid - 1;
-			}
-		}
-
+		NSInteger firstRow = (NSInteger)floor((minY - layer->origins[section]) / layer->yStep);
+		NSInteger lastRow = (NSInteger)floor((maxY - layer->origins[section]) / layer->yStep);
+		NSInteger first = MAX(0, firstRow * layer->columns);
+		NSInteger last = MIN(count - 1, (lastRow + 1) * layer->columns - 1);
 		for (NSInteger item = first; item <= last; item++) {
-			UICollectionViewLayoutAttributes *attributes =
-			    [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:[NSIndexPath indexPathForItem:item inSection:section]];
-			attributes.frame = [self interpolatedFrameForSection:section item:item];
+			NSIndexPath *indexPath = [NSIndexPath indexPathForItem:item inSection:section];
+			UICollectionViewLayoutAttributes *attributes;
+			CGRect native = IMGridItemFrame(layer, section, item);
+			if (back) {
+				attributes = [UICollectionViewLayoutAttributes layoutAttributesForSupplementaryViewOfKind:IMTimelineGridLayoutBackLayerKind
+				                                                                            withIndexPath:indexPath];
+				attributes.zIndex = 0;
+			} else {
+				attributes = [UICollectionViewLayoutAttributes layoutAttributesForCellWithIndexPath:indexPath];
+				if (zoom) {
+					attributes.alpha = 1 - _fade;
+					attributes.zIndex = 1;
+				}
+			}
+			attributes.frame = zoom ? [self zoomFrameForNativeFrame:native inLayer:layer] : native;
 			[result addObject:attributes];
 		}
+	}
+}
+
+- (NSArray<UICollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(CGRect)rect {
+	NSMutableArray<UICollectionViewLayoutAttributes *> *result = [NSMutableArray array];
+	if (_sectionCount <= 0 || !_rest.origins) {
+		return result;
+	}
+	if (![self zoomActive]) {
+		[self appendLayer:&_rest nativeMinY:CGRectGetMinY(rect) nativeMaxY:CGRectGetMaxY(rect) into:result back:NO zoom:NO];
+		return result;
+	}
+	CGFloat viewMinY = CGRectGetMinY(rect) - _zoomContentOffset.y;
+	CGFloat viewMaxY = CGRectGetMaxY(rect) - _zoomContentOffset.y;
+	const IMGridLayer *layers[2] = { &_front, &_back };
+	NSInteger layerCount = _frontColumns == _backColumns ? 1 : 2;
+	for (NSInteger i = 0; i < layerCount; i++) {
+		const IMGridLayer *layer = layers[i];
+		if (i == 0 && _fade >= 1) {
+			continue; 
+		}
+		CGFloat s = MAX(0.0001, layer->scale);
+		CGFloat minY = layer->anchorPoint.y + (viewMinY - _blendedTarget.y) / s;
+		CGFloat maxY = layer->anchorPoint.y + (viewMaxY - _blendedTarget.y) / s;
+		[self appendLayer:layer nativeMinY:minY nativeMaxY:maxY into:result back:(i == 1) zoom:YES];
 	}
 	return result;
 }

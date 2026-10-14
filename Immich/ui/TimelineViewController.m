@@ -11,6 +11,7 @@
 #import "common.h"
 #import <Photos/Photos.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 
 static const int64_t kLocalRefreshDebounceMs = 750;
 
@@ -71,18 +72,20 @@ static const CGFloat kFooterHeight = 56;
 @property (nonatomic) NSInteger columnStepIndex; 
 @property (nonatomic) CGFloat liveColumns;        
 @property (nonatomic, readonly) IMTimelineGridLayout *gridLayout;
-@property (nonatomic) CGFloat pinchStartColumns;  
-@property (nonatomic) CGFloat pinchColumns;      
-@property (nonatomic) NSInteger zoomLowIndex;
-@property (nonatomic) NSInteger zoomHighIndex;
-@property (nonatomic, strong) CADisplayLink *zoomSettleLink;
-@property (nonatomic) CGFloat zoomSettleFrom;
-@property (nonatomic) CGFloat zoomSettleTo;
-@property (nonatomic) CFTimeInterval zoomSettleStartTime;
-@property (nonatomic) CFTimeInterval zoomSettleDuration;
-@property (nonatomic, strong) NSIndexPath *zoomAnchorIndexPath;
-@property (nonatomic) CGFloat zoomAnchorFraction; 
-@property (nonatomic) CGFloat zoomAnchorViewY;    
+@property (nonatomic, strong, nullable) CADisplayLink *zoomLink;
+@property (nonatomic) BOOL pinching;
+@property (nonatomic) BOOL zoomActive;
+@property (nonatomic) CGFloat pinchStartWidth;
+@property (nonatomic) CGFloat pinchStartScale;     
+@property (nonatomic) CGFloat pinchScaleVelocity;  
+@property (nonatomic) CGFloat pinchLogVelocity;    
+@property (nonatomic) CGFloat pinchLogLast;
+@property (nonatomic) CFTimeInterval pinchLogLastTime;
+@property (nonatomic) CGFloat zoomValue;           
+@property (nonatomic) CGFloat zoomPresentation;    
+@property (nonatomic) CGFloat zoomVelocity;        
+@property (nonatomic) CFTimeInterval zoomLastTick;
+@property (nonatomic) BOOL suppressScrollTitleUpdates;
 @property (nonatomic) BOOL clusterMode;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UILabel *> *denseBadgeViewsByBucket;
 @property (nonatomic, strong) UIView *titleScrimView;
@@ -91,6 +94,22 @@ static const CGFloat kFooterHeight = 56;
 @property (nonatomic, strong) UILabel *locationLabel;
 @property (nonatomic, strong) UIVisualEffectView *selectPillView;
 @property (nonatomic, strong) UIButton *selectButton;
+@end
+
+typedef struct {
+	CGFloat columnIndex;        
+	CGFloat direction;          
+	CGFloat directionAnchor;
+	CGFloat delta;              
+	CGFloat velocity;           
+	CGFloat fadeIndex;          
+	CGFloat autoFadeAmount;     
+	CGFloat presentationAmount; 
+} IMZoomFader;
+
+@interface TimelineViewController () {
+	IMZoomFader _fader;
+}
 @end
 
 @implementation TimelineViewController
@@ -120,7 +139,7 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)dealloc {
-	[_zoomSettleLink invalidate];
+	[_zoomLink invalidate];
 	[[PHPhotoLibrary sharedPhotoLibrary] unregisterChangeObserver:self];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
@@ -139,7 +158,7 @@ static const CGFloat kCellSpacing = 2;
 	layout.spacing = kCellSpacing;
 	layout.rowHeight = kClusterRowHeight;
 	layout.footerHeight = kFooterHeight;
-	[layout setFromColumns:kColumnSteps[self.columnStepIndex] toColumns:kColumnSteps[self.columnStepIndex] progress:0];
+	[layout setColumns:kColumnSteps[self.columnStepIndex]];
 
 	self.collectionView = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout];
 	self.collectionView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -152,6 +171,9 @@ static const CGFloat kCellSpacing = 2;
 	}
 	[self.collectionView registerClass:[TimelineCell class] forCellWithReuseIdentifier:TimelineCellReuseIdentifier];
 	[self.collectionView registerClass:[IMClusterCell class] forCellWithReuseIdentifier:IMClusterCellReuseIdentifier];
+	[self.collectionView registerClass:[TimelineCell class]
+	        forSupplementaryViewOfKind:IMTimelineGridLayoutBackLayerKind
+	               withReuseIdentifier:TimelineCellReuseIdentifier];
 	[self.view addSubview:self.collectionView];
 
 	self.footerLabel = [[UILabel alloc] init];
@@ -717,6 +739,12 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (NSInteger)yearOfBucket:(NSString *)bucket {
+	if (bucket.length >= 5 && [bucket characterAtIndex:4] == '-') {
+		NSInteger year = [bucket substringToIndex:4].integerValue;
+		if (year > 0) {
+			return year;
+		}
+	}
 	NSDate *date = [self.headerDateFormatter dateFromString:bucket];
 	if (!date) {
 		return 0;
@@ -782,24 +810,43 @@ static const CGFloat kCellSpacing = 2;
 
 	TimelineCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:TimelineCellReuseIdentifier
 	                                                                forIndexPath:indexPath];
+	BOOL selectable = [self configureTimelineCell:cell atIndexPath:indexPath];
+	cell.selectionModeEnabled = selectable && self.selecting; 
+	return cell;
+}
+
+- (UICollectionReusableView *)collectionView:(UICollectionView *)collectionView
+           viewForSupplementaryElementOfKind:(NSString *)kind
+                                 atIndexPath:(NSIndexPath *)indexPath {
+	TimelineCell *cell = [collectionView dequeueReusableSupplementaryViewOfKind:kind
+	                                                         withReuseIdentifier:TimelineCellReuseIdentifier
+	                                                                forIndexPath:indexPath];
+	if (self.clusterMode || indexPath.section >= (NSInteger)self.bucketDates.count) {
+		[cell configureWithAsset:nil];
+	} else {
+		[self configureTimelineCell:cell atIndexPath:indexPath];
+	}
+	cell.selectionModeEnabled = NO;
+	return cell;
+}
+
+- (BOOL)configureTimelineCell:(TimelineCell *)cell atIndexPath:(NSIndexPath *)indexPath {
 	NSString *bucket = self.bucketDates[indexPath.section];
 	IMTimelineLocalItem *localItem = [self localItemAtIndexPath:indexPath];
 	if (localItem) {
+		cell.prefersHighResolution = NO;
 		[cell configureWithLocalAsset:localItem.asset syncState:localItem.state];
-		cell.selectionModeEnabled = NO; 
-		return cell;
+		return NO;
 	}
-
 	IMAsset *asset = [self loadedServerAssetAtIndexPath:indexPath];
+	cell.prefersHighResolution = [self wantsHighResolutionCells];
 	if (asset) {
 		[cell configureWithAsset:asset];
-		cell.selectionModeEnabled = self.selecting;
-	} else {
-		[cell configureWithAsset:nil];
-		cell.selectionModeEnabled = NO;
-		[self loadBucketIfNeeded:bucket];
+		return YES;
 	}
-	return cell;
+	[cell configureWithAsset:nil];
+	[self loadBucketIfNeeded:bucket];
+	return NO;
 }
 
 - (IMClusterCell *)clusterCellAt:(NSIndexPath *)indexPath inCollectionView:(UICollectionView *)collectionView {
@@ -944,10 +991,166 @@ static const CGFloat kCellSpacing = 2;
 #pragma mark - UIScrollViewDelegate
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+	if (self.suppressScrollTitleUpdates) {
+		return;
+	}
 	[self updateTitleBarForScrollPosition];
 }
 
 #pragma mark - Pinch-to-zoom (Phase 9)
+
+
+static const CGFloat kZoomSpringStiffness = 150;     
+static const CGFloat kZoomDecelerationRate = 0.992;
+static const CGFloat kZoomInRubberBanding = 0.5;
+static const CGFloat kZoomOutRubberBanding = 0.005;  
+static const CGFloat kPinchSmoothingDuration = 1.0 / 30;
+static const CGFloat kFadeDirectionHysteresis = 0.025;
+static const CGFloat kFadeMinDuration = 0.2;
+static const CGFloat kFadeMaxDuration = 1.5;
+static const CGFloat kFadeModeTransitionDuration = 0.3;
+
+static inline CGFloat IMZoomLog(CGFloat width) {
+	return log10(fabs(width) * 1000 + 1) * (width < 0 ? -1 : 1);
+}
+
+static inline CGFloat IMZoomExp(CGFloat value) {
+	return (pow(10, fabs(value)) - 1) / 1000 * (value < 0 ? -1 : 1);
+}
+
+static inline CGFloat IMStepWidth(NSInteger index) {
+	return 1.0 / kColumnSteps[MAX(0, MIN(index, kColumnStepCount - 1))];
+}
+
+static inline CGFloat IMSign(CGFloat value) {
+	return value > 0 ? 1 : (value < 0 ? -1 : 0);
+}
+
+static CGFloat IMColumnIndexForWidth(CGFloat width) {
+	if (width >= IMStepWidth(0)) {
+		return 0;
+	}
+	for (NSInteger i = 0; i + 1 < kColumnStepCount; i++) {
+		CGFloat wide = IMStepWidth(i);
+		CGFloat narrow = IMStepWidth(i + 1);
+		if (width >= narrow) {
+			return i + (wide - width) / (wide - narrow);
+		}
+	}
+	return kColumnStepCount - 1;
+}
+
+static NSInteger IMClosestStepForZoomValue(CGFloat value) {
+	NSInteger best = 0;
+	CGFloat bestDistance = CGFLOAT_MAX;
+	for (NSInteger i = 0; i < kColumnStepCount; i++) {
+		CGFloat distance = fabs(IMZoomLog(IMStepWidth(i)) - value);
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			best = i;
+		}
+	}
+	return best;
+}
+
+static void IMFadeWindow(NSInteger i, CGFloat *outMin, CGFloat *outMax) {
+	const CGFloat minAcceptableCoverage = 0.3;
+	const CGFloat alphaMaxAcceptableScale = 2.5;
+	const CGFloat alphaMinAcceptableCoverage = 0.5;
+	CGFloat ratio = IMStepWidth(i + 1) / IMStepWidth(i);
+	CGFloat fadeMin = MAX(1 - MAX(0, MIN(1, alphaMaxAcceptableScale * ratio)), 0.1);
+	if (minAcceptableCoverage + fadeMin > 1) {
+		fadeMin = 1 - minAcceptableCoverage;
+	}
+	CGFloat fadeMax = 0.7;
+	if (kColumnSteps[i] != 1) {
+		CGFloat t = ratio >= 1 ? 1 - (alphaMinAcceptableCoverage - 1) / (ratio - 1)
+		                       : (alphaMinAcceptableCoverage - ratio) / (1 - ratio);
+		fadeMax = 1 - MAX(0, MIN(1, t));
+	}
+	fadeMax = MIN(fadeMax, 0.9);
+	if (fadeMax < minAcceptableCoverage + fadeMin) {
+		fadeMax = minAcceptableCoverage + fadeMin;
+	}
+	*outMin = i + fadeMin;
+	*outMax = i + fadeMax;
+}
+
+static NSInteger IMFadeTransitionIndex(CGFloat columnIndex) {
+	return MAX(0, MIN((NSInteger)floor(columnIndex), kColumnStepCount - 2));
+}
+
+- (void)setFaderColumnIndex:(CGFloat)value {
+	if (value == _fader.columnIndex) {
+		return;
+	}
+	CGFloat sign = IMSign(value - _fader.columnIndex);
+	_fader.delta += value - _fader.columnIndex;
+	if (sign == _fader.direction) {
+		_fader.directionAnchor = value;
+	} else if (fabs(_fader.directionAnchor - value) >= kFadeDirectionHysteresis) {
+		_fader.directionAnchor = value;
+		_fader.direction = sign;
+	}
+	_fader.columnIndex = value;
+}
+
+- (CGFloat)faderTargetIndex {
+	CGFloat value = _fader.columnIndex;
+	CGFloat fadeMin = 0;
+	CGFloat fadeMax = 0;
+	IMFadeWindow(IMFadeTransitionIndex(value), &fadeMin, &fadeMax);
+	if (_fader.direction <= 0) {
+		if (value < fadeMax && value > fadeMin) {
+			return fadeMin;
+		}
+	} else if (value > fadeMin && value <= fadeMax) {
+		return fadeMax;
+	}
+	return value;
+}
+
+- (void)tickFaderWithDuration:(CGFloat)dt {
+	CGFloat movement = _fader.delta;
+	_fader.delta = 0;
+	_fader.velocity = 0.2 * (movement / dt) + 0.8 * _fader.velocity;
+	CGFloat target = [self faderTargetIndex];
+	CGFloat speed = MAX(1 / kFadeMaxDuration, MIN(1 / kFadeMinDuration, fabs(_fader.velocity)));
+	CGFloat step = dt * IMSign(target - _fader.fadeIndex) * speed;
+	if (movement > 0 && step > 0 && step < movement) {
+		step = movement;
+	} else if (movement < 0 && step < 0 && step > movement) {
+		step = movement;
+	}
+	if (fabs(_fader.fadeIndex - target) > 0.001 && fabs(step) <= fabs(target - _fader.fadeIndex)) {
+		_fader.fadeIndex += step;
+	} else {
+		_fader.fadeIndex = target;
+	}
+	CGFloat amountStep = dt / kFadeModeTransitionDuration;
+	if (_fader.presentationAmount < _fader.autoFadeAmount) {
+		_fader.presentationAmount = MIN(_fader.autoFadeAmount, _fader.presentationAmount + amountStep);
+	} else {
+		_fader.presentationAmount = MAX(_fader.autoFadeAmount, _fader.presentationAmount - amountStep);
+	}
+}
+
+- (CGFloat)faderPresentationIndex {
+	CGFloat fadeMin = 0;
+	CGFloat fadeMax = 0;
+	NSInteger transition = IMFadeTransitionIndex(_fader.fadeIndex);
+	IMFadeWindow(transition, &fadeMin, &fadeMax);
+	CGFloat progress = MAX(0, MIN(1, (_fader.fadeIndex - fadeMin) / (fadeMax - fadeMin))) + transition;
+	return progress * _fader.presentationAmount + (1 - _fader.presentationAmount) * _fader.columnIndex;
+}
+
+- (void)resetFaderAtColumnIndex:(CGFloat)columnIndex {
+	memset(&_fader, 0, sizeof(_fader));
+	_fader.columnIndex = columnIndex;
+	_fader.directionAnchor = columnIndex;
+	_fader.fadeIndex = columnIndex;
+	_fader.autoFadeAmount = 1;
+}
 
 - (void)handlePinch:(UIPinchGestureRecognizer *)gesture {
 	if (self.selecting) {
@@ -955,15 +1158,17 @@ static const CGFloat kCellSpacing = 2;
 	}
 	switch (gesture.state) {
 		case UIGestureRecognizerStateBegan:
-			[self endZoomSettle];
-			self.pinchStartColumns = self.clusterMode ? kColumnSteps[kColumnStepCount - 1] : kColumnSteps[self.columnStepIndex];
-			self.pinchColumns = self.pinchStartColumns;
-			[self captureZoomAnchorForGesture:gesture];
+			self.pinchStartScale = gesture.scale > 0 ? gesture.scale : 1;
+			if (self.clusterMode) {
+				break;
+			}
+			[self beginPinchAtPoint:[gesture locationInView:self.collectionView]];
 			break;
 
 		case UIGestureRecognizerStateChanged: {
+			CGFloat scale = gesture.scale / self.pinchStartScale;
 			if (self.clusterMode) {
-				if (gesture.scale >= kClusterExitPinchScale) {
+				if (scale >= kClusterExitPinchScale) {
 					NSString *keepBucket = [self topmostVisibleBucket];
 					self.clusterMode = NO;
 					self.columnStepIndex = kColumnStepCount - 1;
@@ -972,25 +1177,36 @@ static const CGFloat kCellSpacing = 2;
 				}
 				return;
 			}
-			CGFloat minColumns = kColumnSteps[0];
-			CGFloat maxColumns = kColumnSteps[kColumnStepCount - 1];
-			CGFloat rawColumns = self.pinchStartColumns / gesture.scale;
-			if (rawColumns > maxColumns * kClusterEnterOvershoot) {
+			if (!self.pinching) {
+				return;
+			}
+			CGFloat width = self.pinchStartWidth * scale;
+			if (width < IMStepWidth(kColumnStepCount - 1) / kClusterEnterOvershoot) {
 				NSString *keepBucket = [self topmostVisibleBucket];
+				[self cancelZoom];
 				self.clusterMode = YES;
 				[self animateModeTransitionZoomingOut:YES thenScrollToBucket:keepBucket];
 				return;
 			}
-			self.pinchColumns = MAX(minColumns, MIN(rawColumns, maxColumns));
-			self.zoomAnchorViewY = [gesture locationInView:self.collectionView].y - self.collectionView.contentOffset.y;
-			[self applyZoomForColumns:self.pinchColumns];
+			self.zoomValue = IMZoomLog(width);
+			self.pinchScaleVelocity = gesture.velocity;
+			CFTimeInterval now = CACurrentMediaTime();
+			CFTimeInterval dt = now - self.pinchLogLastTime;
+			if (self.pinchLogLastTime == 0) {
+				self.pinchLogLast = self.zoomValue;
+				self.pinchLogLastTime = now;
+			} else if (dt > 0.003 && fabs(self.zoomValue - self.pinchLogLast) > 0.00001) {
+				self.pinchLogVelocity = (self.zoomValue - self.pinchLogLast) / dt * 0.5 + self.pinchLogVelocity * 0.5;
+				self.pinchLogLast = self.zoomValue;
+				self.pinchLogLastTime = now;
+			}
 			break;
 		}
 
 		case UIGestureRecognizerStateEnded:
 		case UIGestureRecognizerStateCancelled:
-			if (!self.clusterMode) {
-				[self settleZoomToNearestColumnStep];
+			if (self.pinching) {
+				[self releasePinch];
 			}
 			break;
 
@@ -999,25 +1215,164 @@ static const CGFloat kCellSpacing = 2;
 	}
 }
 
-- (void)applyZoomForColumns:(CGFloat)columns {
-	NSInteger lowIndex = 0;
-	while (lowIndex + 1 < kColumnStepCount && kColumnSteps[lowIndex + 1] <= columns) {
-		lowIndex++;
+- (void)beginPinchAtPoint:(CGPoint)point {
+	if (self.zoomActive) {
+		self.pinchStartWidth = IMZoomExp(self.zoomPresentation);
+		self.zoomValue = self.zoomPresentation;
+		self.zoomVelocity = 0;
+	} else {
+		NSIndexPath *anchor = [self.collectionView indexPathForItemAtPoint:point];
+		if (!anchor) {
+			CGFloat bestDistance = CGFLOAT_MAX;
+			for (UICollectionViewCell *cell in self.collectionView.visibleCells) {
+				CGFloat distance = hypot(CGRectGetMidX(cell.frame) - point.x, CGRectGetMidY(cell.frame) - point.y);
+				if (distance < bestDistance) {
+					bestDistance = distance;
+					anchor = [self.collectionView indexPathForCell:cell];
+				}
+			}
+		}
+		if (!anchor) {
+			return;
+		}
+		CGPoint fraction = CGPointMake(0.5, 0.5);
+		UICollectionViewLayoutAttributes *attributes = [self.gridLayout layoutAttributesForItemAtIndexPath:anchor];
+		if (attributes.frame.size.width > 0 && attributes.frame.size.height > 0) {
+			fraction = CGPointMake(MAX(0, MIN(1, (point.x - CGRectGetMinX(attributes.frame)) / attributes.frame.size.width)),
+			                       MAX(0, MIN(1, (point.y - CGRectGetMinY(attributes.frame)) / attributes.frame.size.height)));
+		}
+		CGPoint offset = self.collectionView.contentOffset;
+		[self.collectionView setContentOffset:offset animated:NO];
+		self.collectionView.scrollEnabled = NO;
+		CGPoint target = CGPointMake(point.x - offset.x, point.y - offset.y);
+		[self.gridLayout beginZoomWithAnchor:anchor fraction:fraction target:target contentOffset:offset];
+		self.zoomActive = YES;
+		self.pinchStartWidth = IMStepWidth(self.columnStepIndex);
+		self.zoomValue = IMZoomLog(self.pinchStartWidth);
+		self.zoomPresentation = self.zoomValue;
+		self.zoomVelocity = 0;
+		[self resetFaderAtColumnIndex:self.columnStepIndex];
+		[self updateHighResolutionForVisibleCells];
 	}
-	NSInteger highIndex = MIN(lowIndex + 1, kColumnStepCount - 1);
-	CGFloat low = kColumnSteps[lowIndex];
-	CGFloat high = kColumnSteps[highIndex];
-	CGFloat progress = 0;
-	if (high > low) {
-		progress = (log(columns) - log(low)) / (log(high) - log(low));
-		progress = MAX(0, MIN(1, progress));
+	_fader.autoFadeAmount = 1;
+	self.pinching = YES;
+	self.pinchLogVelocity = 0;
+	self.pinchLogLastTime = 0;
+	self.pinchScaleVelocity = 0;
+	[self startZoomLink];
+}
+
+- (void)releasePinch {
+	self.pinching = NO;
+	_fader.autoFadeAmount = 0;
+	CGFloat velocity = (CACurrentMediaTime() - self.pinchLogLastTime < 0.1) ? self.pinchLogVelocity : 0;
+	CGFloat current = self.zoomValue;
+	CGFloat projected = MAX(0.00001, current + velocity * 0.001 * kZoomDecelerationRate / (1 - kZoomDecelerationRate));
+	NSInteger startStep = IMClosestStepForZoomValue(IMZoomLog(self.pinchStartWidth));
+	NSInteger step = IMClosestStepForZoomValue(projected);
+	if (step == startStep) {
+		CGFloat width = IMZoomExp(current);
+		CGFloat moveSign = IMSign(width - self.pinchStartWidth);
+		CGFloat velocitySign = IMSign(self.pinchScaleVelocity);
+		step = IMClosestStepForZoomValue(current);
+		if (velocitySign == moveSign || (fabs(width / self.pinchStartWidth - 1) > 0.1 && velocitySign == 0)) {
+			step = (NSInteger)llround(step - moveSign); 
+		}
+		step = MAX(0, MIN(step, kColumnStepCount - 1));
 	}
-	self.zoomLowIndex = lowIndex;
-	self.zoomHighIndex = highIndex;
-	self.liveColumns = columns;
-	[self.gridLayout setFromColumns:kColumnSteps[lowIndex] toColumns:kColumnSteps[highIndex] progress:progress];
-	[self relayoutGridKeepingZoomAnchor];
+	self.columnStepIndex = step;
+	self.zoomValue = IMZoomLog(IMStepWidth(step));
+	self.zoomVelocity = velocity;
+	[self startZoomLink];
+}
+
+- (void)startZoomLink {
+	if (self.zoomLink) {
+		return;
+	}
+	self.zoomLastTick = CACurrentMediaTime();
+	self.zoomLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(zoomTick:)];
+	[self.zoomLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)zoomTick:(CADisplayLink *)link {
+	CFTimeInterval now = CACurrentMediaTime();
+	CGFloat dt = (CGFloat)MAX(1.0 / 240, MIN(1.0 / 20, now - self.zoomLastTick));
+	self.zoomLastTick = now;
+	if (self.pinching) {
+		self.zoomPresentation += (self.zoomValue - self.zoomPresentation) * MIN(1, dt / kPinchSmoothingDuration);
+	} else {
+		CGFloat omega = sqrt(kZoomSpringStiffness);
+		CGFloat x = self.zoomPresentation - self.zoomValue;
+		CGFloat c = self.zoomVelocity + omega * x;
+		CGFloat decay = exp(-omega * dt);
+		CGFloat newX = (x + c * dt) * decay;
+		CGFloat newV = (c - omega * (x + c * dt)) * decay;
+		self.zoomPresentation = self.zoomValue + newX;
+		self.zoomVelocity = newV;
+		if (fabs(newX) < 0.0005 && fabs(newV) < 0.005) {
+			[self finishZoom];
+			return;
+		}
+	}
+	[self applyZoomPresentationWithDuration:dt];
+}
+
+- (void)applyZoomPresentationWithDuration:(CGFloat)dt {
+	CGFloat raw = self.zoomPresentation;
+	CGFloat banded = raw;
+	CGFloat widest = IMZoomLog(IMStepWidth(0));
+	CGFloat narrowest = IMZoomLog(IMStepWidth(kColumnStepCount - 1));
+	if (banded > widest) {
+		banded = log((banded - widest) / kZoomInRubberBanding + 1) * kZoomInRubberBanding + widest;
+	} else if (banded < narrowest) {
+		banded = narrowest - log((narrowest - banded) / kZoomOutRubberBanding + 1) * kZoomOutRubberBanding;
+	}
+	CGFloat width = IMZoomExp(banded);
+	CGFloat layerIndex = IMColumnIndexForWidth(width);
+	NSInteger front = MAX(0, MIN((NSInteger)floor(layerIndex), kColumnStepCount - 1));
+	NSInteger back = MAX(0, MIN((NSInteger)ceil(layerIndex), kColumnStepCount - 1));
+
+	[self setFaderColumnIndex:IMColumnIndexForWidth(IMZoomExp(raw))];
+	[self tickFaderWithDuration:dt];
+	CGFloat fade = MAX(0, MIN(1, [self faderPresentationIndex] - front));
+
+	self.liveColumns = 1 / width;
+	[self.gridLayout setZoomFrontColumns:kColumnSteps[front] backColumns:kColumnSteps[back] normalizedWidth:width fade:fade];
+	[self.collectionView layoutIfNeeded];
 	[self updateTitleBarForScrollPosition];
+}
+
+- (void)finishZoom {
+	[self.zoomLink invalidate];
+	self.zoomLink = nil;
+	if (!self.zoomActive) {
+		return;
+	}
+	NSInteger columns = kColumnSteps[self.columnStepIndex];
+	CGFloat offsetY = [self.gridLayout restingContentOffsetYForColumns:columns];
+	[self.gridLayout endZoomAtColumns:columns];
+	self.zoomActive = NO;
+	self.liveColumns = columns;
+	self.suppressScrollTitleUpdates = YES;
+	self.collectionView.contentOffset = CGPointMake(self.collectionView.contentOffset.x, offsetY);
+	self.suppressScrollTitleUpdates = NO;
+	self.collectionView.scrollEnabled = YES;
+	[self.collectionView layoutIfNeeded];
+	[self updateFooterLabel];
+	[self updateTitleBarForScrollPosition];
+	[self updateHighResolutionForVisibleCells];
+}
+
+- (void)cancelZoom {
+	[self.zoomLink invalidate];
+	self.zoomLink = nil;
+	self.pinching = NO;
+	if (self.zoomActive) {
+		self.zoomActive = NO;
+		[self.gridLayout endZoomAtColumns:kColumnSteps[self.columnStepIndex]];
+		self.collectionView.scrollEnabled = YES;
+	}
 }
 
 - (IMTimelineGridLayout *)gridLayout {
@@ -1025,57 +1380,21 @@ static const CGFloat kCellSpacing = 2;
 }
 
 - (void)applyColumnStepIndex:(NSInteger)index {
-	self.zoomLowIndex = index;
-	self.zoomHighIndex = index;
 	self.liveColumns = kColumnSteps[index];
-	[self.gridLayout setFromColumns:kColumnSteps[index] toColumns:kColumnSteps[index] progress:0];
+	[self.gridLayout setColumns:kColumnSteps[index]];
 }
 
-- (void)settleZoomToNearestColumnStep {
-	CGFloat progress = self.gridLayout.progress;
-	BOOL toHigh = progress >= 0.5;
-	self.columnStepIndex = toHigh ? self.zoomHighIndex : self.zoomLowIndex;
-	self.zoomSettleFrom = progress;
-	self.zoomSettleTo = toHigh ? 1 : 0;
-	if (fabs(self.zoomSettleTo - self.zoomSettleFrom) < 0.001) {
-		[self endZoomSettle];
-		return;
-	}
-	self.zoomSettleStartTime = CACurrentMediaTime();
-	self.zoomSettleDuration = 0.1 + 0.2 * fabs(self.zoomSettleTo - self.zoomSettleFrom);
-	self.zoomSettleLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(zoomSettleTick:)];
-	[self.zoomSettleLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+- (BOOL)wantsHighResolutionCells {
+	return !self.clusterMode && !self.zoomActive && kColumnSteps[self.columnStepIndex] == 1;
 }
 
-- (void)zoomSettleTick:(CADisplayLink *)link {
-	CGFloat elapsed = (CGFloat)(CACurrentMediaTime() - self.zoomSettleStartTime);
-	CGFloat t = self.zoomSettleDuration > 0 ? elapsed / self.zoomSettleDuration : 1;
-	if (t >= 1) {
-		[self endZoomSettle];
-		return;
+- (void)updateHighResolutionForVisibleCells {
+	BOOL wants = [self wantsHighResolutionCells];
+	for (UICollectionViewCell *cell in self.collectionView.visibleCells) {
+		if ([cell isKindOfClass:[TimelineCell class]]) {
+			((TimelineCell *)cell).prefersHighResolution = wants;
+		}
 	}
-	CGFloat eased = 1 - pow(1 - t, 3); 
-	CGFloat progress = self.zoomSettleFrom + (self.zoomSettleTo - self.zoomSettleFrom) * eased;
-	CGFloat low = kColumnSteps[self.zoomLowIndex];
-	CGFloat high = kColumnSteps[self.zoomHighIndex];
-	self.liveColumns = exp(log(low) + (log(high) - log(low)) * progress);
-	[self.gridLayout setFromColumns:kColumnSteps[self.zoomLowIndex]
-	                      toColumns:kColumnSteps[self.zoomHighIndex]
-	                       progress:progress];
-	[self relayoutGridKeepingZoomAnchor];
-	[self updateTitleBarForScrollPosition];
-}
-
-- (void)endZoomSettle {
-	[self.zoomSettleLink invalidate];
-	self.zoomSettleLink = nil;
-	if (self.clusterMode) {
-		return;
-	}
-	[self applyColumnStepIndex:self.columnStepIndex];
-	[self relayoutGridKeepingZoomAnchor];
-	self.zoomAnchorIndexPath = nil;
-	[self updateTitleBarForScrollPosition];
 }
 
 - (NSInteger)nearestColumnStepIndexTo:(CGFloat)columns {
@@ -1093,59 +1412,6 @@ static const CGFloat kCellSpacing = 2;
 
 - (BOOL)isDenseGridMode {
 	return kColumnSteps[[self nearestColumnStepIndexTo:self.liveColumns]] >= kDenseGridMinColumns;
-}
-
-- (void)captureZoomAnchorForGesture:(UIPinchGestureRecognizer *)gesture {
-	CGPoint point = [gesture locationInView:self.collectionView]; 
-	self.zoomAnchorViewY = point.y - self.collectionView.contentOffset.y;
-	NSIndexPath *indexPath = [self.collectionView indexPathForItemAtPoint:point];
-	if (!indexPath) {
-		CGFloat bestDistance = CGFLOAT_MAX;
-		for (UICollectionViewCell *cell in self.collectionView.visibleCells) {
-			CGFloat distance = fabs(CGRectGetMidY(cell.frame) - point.y);
-			if (distance < bestDistance) {
-				bestDistance = distance;
-				indexPath = [self.collectionView indexPathForCell:cell];
-			}
-		}
-	}
-	self.zoomAnchorIndexPath = indexPath;
-	self.zoomAnchorFraction = 0.5;
-	if (indexPath) {
-		UICollectionViewLayoutAttributes *attributes =
-		    [self.collectionView.collectionViewLayout layoutAttributesForItemAtIndexPath:indexPath];
-		if (attributes && attributes.frame.size.height > 0) {
-			CGFloat fraction = (point.y - CGRectGetMinY(attributes.frame)) / attributes.frame.size.height;
-			self.zoomAnchorFraction = MAX(0, MIN(1, fraction));
-		}
-	}
-}
-
-- (void)relayoutGridKeepingZoomAnchor {
-	[self.collectionView.collectionViewLayout invalidateLayout];
-	[self.collectionView layoutIfNeeded];
-	NSIndexPath *anchor = self.zoomAnchorIndexPath;
-	if (!anchor || anchor.section >= self.collectionView.numberOfSections ||
-	    anchor.item >= [self.collectionView numberOfItemsInSection:anchor.section]) {
-		return;
-	}
-	UICollectionViewLayoutAttributes *attributes =
-	    [self.collectionView.collectionViewLayout layoutAttributesForItemAtIndexPath:anchor];
-	if (!attributes) {
-		return;
-	}
-	CGFloat anchorContentY = CGRectGetMinY(attributes.frame) + self.zoomAnchorFraction * attributes.frame.size.height;
-	UIEdgeInsets insets = self.collectionView.contentInset;
-	if (@available(iOS 11.0, *)) {
-		insets = self.collectionView.adjustedContentInset;
-	}
-	CGFloat minOffset = -insets.top;
-	CGFloat maxOffset = MAX(minOffset,
-	                        self.collectionView.contentSize.height + insets.bottom - self.collectionView.bounds.size.height);
-	CGFloat offsetY = MAX(minOffset, MIN(maxOffset, anchorContentY - self.zoomAnchorViewY));
-	self.collectionView.contentOffset = CGPointMake(0, offsetY);
-	[self.collectionView layoutIfNeeded];
-	[self updateFooterLabel]; 
 }
 
 - (nullable NSString *)topmostVisibleBucket {
@@ -1167,7 +1433,6 @@ static const CGFloat kCellSpacing = 2;
 
 - (void)animateModeTransitionZoomingOut:(BOOL)zoomingOut thenScrollToBucket:(nullable NSString *)bucket {
 	self.selectButton.enabled = !self.clusterMode;
-	self.zoomAnchorIndexPath = nil;
 
 	UIView *snapshot = [self.collectionView snapshotViewAfterScreenUpdates:NO];
 	snapshot.frame = self.collectionView.frame;
@@ -1178,7 +1443,7 @@ static const CGFloat kCellSpacing = 2;
 
 	self.collectionView.alpha = 0;
 	self.collectionView.transform = CGAffineTransformMakeScale(incomingStartScale, incomingStartScale);
-	[self endZoomSettle];
+	[self cancelZoom];
 	self.gridLayout.rowMode = self.clusterMode;
 	self.gridLayout.footerHeight = self.clusterMode ? 0 : kFooterHeight;
 	if (!self.clusterMode) {
@@ -1518,7 +1783,11 @@ static const CGFloat kCellSpacing = 2;
 			self.denseBadgeViewsByBucket[bucket] = badge;
 			[self.collectionView addSubview:badge];
 		}
-		badge.attributedText = isYearOnly ? [self yearOnlyBadgeTextForBucket:bucket] : [self monthYearBadgeTextForBucket:bucket];
+		NSNumber *yearOnly = @(isYearOnly);
+		if (![objc_getAssociatedObject(badge, @selector(updateDenseBadges)) isEqual:yearOnly]) {
+			badge.attributedText = isYearOnly ? [self yearOnlyBadgeTextForBucket:bucket] : [self monthYearBadgeTextForBucket:bucket];
+			objc_setAssociatedObject(badge, @selector(updateDenseBadges), yearOnly, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		}
 		badge.frame = badgeFrame;
 		[self.collectionView bringSubviewToFront:badge];
 	}
